@@ -39,7 +39,7 @@ protox = "0.10"
 
 # data
 polars = { version = "0.55", default-features = false, features = [
-    "lazy", "csv", "parquet", "json", "dtype-datetime", "dtype-date", "dtype-categorical",
+    "lazy", "csv", "parquet", "json", "dtype-datetime", "dtype-date", "dtype-categorical", "approx_unique",
     "temporal", "strings", "is_in", "fmt", "abs", "cum_agg", "rank", "round_series",
 ] }
 sha2 = "0.11"

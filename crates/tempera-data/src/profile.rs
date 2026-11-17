@@ -12,10 +12,13 @@ use crate::error::Result;
 use crate::ingest::Dataset;
 
 /// Bump when the profile format or semantics change.
-pub const PROFILE_VERSION: u32 = 1;
+pub const PROFILE_VERSION: u32 = 2;
 const TOP_K: usize = 10;
 const HIST_BINS: usize = 10;
 const SAMPLE_ROWS: usize = 5;
+/// Above this many rows, distribution details come from a uniform sample.
+const EXACT_LIMIT: u64 = 2_000_000;
+const SAMPLE_LIMIT: u64 = 1_000_000;
 
 /// Semantic kind of a column, inferred from dtype and cardinality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -41,6 +44,11 @@ pub struct Profile {
     pub columns: Vec<ColumnProfile>,
     /// First rows, as JSON values, for previews.
     pub sample: Vec<serde_json::Map<String, serde_json::Value>>,
+    /// For large datasets: rows in the uniform sample used for quantiles, histograms
+    /// and top values. Counts, min/max/mean/std are always exact; distinct counts
+    /// are approximate (HyperLogLog) when this is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_rows: Option<u64>,
 }
 
 impl Profile {
@@ -111,21 +119,131 @@ pub fn profile_dataset(ds: &Dataset) -> Result<Profile> {
 pub fn profile_parquet(path: &Path, dataset_id: &str) -> Result<Profile> {
     let lf = crate::ingest::scan_parquet(path)?;
     let schema = lf.clone().collect_schema()?;
+    let rows = count_rows(&lf)?;
+    let sample_df = lf.clone().limit(SAMPLE_ROWS as u32).collect()?;
+    let sample = rows_as_json(&sample_df);
+    if rows > EXACT_LIMIT {
+        return profile_large(lf, &schema, rows, dataset_id, sample);
+    }
     let mut columns = Vec::with_capacity(schema.len());
-    let mut rows = 0u64;
     for (name, _) in schema.iter() {
         let df = lf.clone().select([col(name.clone())]).collect()?;
         let s = df.column(name.as_str())?.as_materialized_series().clone();
-        rows = s.len() as u64;
         columns.push(profile_series(&s)?);
     }
-    let sample_df = lf.limit(SAMPLE_ROWS as u32).collect()?;
     Ok(Profile {
         version: PROFILE_VERSION,
         dataset_id: dataset_id.to_owned(),
         rows,
         columns,
-        sample: rows_as_json(&sample_df),
+        sample,
+        sampled_rows: None,
+    })
+}
+
+fn collect_streaming(lf: LazyFrame) -> Result<DataFrame> {
+    // A plain select/filter always yields a single frame.
+    Ok(lf.collect_with_engine(Engine::Streaming)?.unwrap_single())
+}
+
+fn count_rows(lf: &LazyFrame) -> Result<u64> {
+    let df = lf.clone().select([len().alias("n")]).collect()?;
+    Ok(df
+        .column("n")?
+        .cast(&DataType::UInt64)?
+        .u64()?
+        .get(0)
+        .unwrap_or(0))
+}
+
+/// Exact aggregates over all rows (streaming), distribution details from a uniform sample.
+fn profile_large(
+    lf: LazyFrame,
+    schema: &Schema,
+    rows: u64,
+    dataset_id: &str,
+    sample: Vec<serde_json::Map<String, serde_json::Value>>,
+) -> Result<Profile> {
+    // One streaming query per column keeps memory at a few batches, even if an
+    // aggregation falls back to the in-memory engine for that column.
+    let mut full: Vec<DataFrame> = Vec::with_capacity(schema.len());
+    for (name, dtype) in schema.iter() {
+        let c = || col(name.clone());
+        let mut aggs = vec![
+            c().null_count()
+                .cast(DataType::UInt64)
+                .alias(format!("{name}::nulls")),
+            c().approx_n_unique()
+                .cast(DataType::UInt64)
+                .alias(format!("{name}::distinct")),
+        ];
+        if dtype.is_primitive_numeric() {
+            let f = || c().cast(DataType::Float64);
+            aggs.push(f().min().alias(format!("{name}::min")));
+            aggs.push(f().max().alias(format!("{name}::max")));
+            aggs.push(f().mean().alias(format!("{name}::mean")));
+            aggs.push(f().std(1).alias(format!("{name}::std")));
+        } else if dtype.is_temporal() {
+            aggs.push(c().min().cast(DataType::String).alias(format!("{name}::tmin")));
+            aggs.push(c().max().cast(DataType::String).alias(format!("{name}::tmax")));
+        }
+        full.push(collect_streaming(lf.clone().select(aggs))?);
+    }
+    let find = |k: &str| full.iter().find_map(|df| df.column(k).ok().cloned());
+    let get_u = |k: &str| -> Option<u64> { find(k)?.u64().ok()?.get(0) };
+    let get_f = |k: &str| -> Option<f64> { find(k)?.f64().ok()?.get(0) };
+    let get_s = |k: &str| -> Option<String> { find(k)?.str().ok()?.get(0).map(str::to_owned) };
+
+    // Uniform sample: every `step`-th row, filtered while streaming.
+    let step = rows.div_ceil(SAMPLE_LIMIT).max(1);
+    let sampled = collect_streaming(
+        lf.with_row_index("__row__", None)
+            .filter((col("__row__").cast(DataType::UInt64) % lit(step)).eq(lit(0u64)))
+            .drop(by_name(["__row__"], true, false)),
+    )?;
+    let mut columns = Vec::with_capacity(schema.len());
+    for (name, dtype) in schema.iter() {
+        let s = sampled.column(name.as_str())?.as_materialized_series().clone();
+        let mut p = profile_series(&s)?;
+        let nulls = get_u(&format!("{name}::nulls")).unwrap_or(p.null_count);
+        let non_null = rows - nulls.min(rows);
+        let distinct = get_u(&format!("{name}::distinct"))
+            .map(|d| d.saturating_sub(u64::from(nulls > 0)).min(non_null))
+            .unwrap_or(p.n_unique);
+        p.null_count = nulls;
+        p.null_fraction = nulls as f64 / rows as f64;
+        p.n_unique = distinct;
+        p.unique_ratio = if non_null == 0 {
+            0.0
+        } else {
+            distinct as f64 / non_null as f64
+        };
+        if distinct <= 1 {
+            p.kind = ColumnKind::Constant;
+        } else if dtype.is_primitive_numeric() {
+            p.kind = ColumnKind::Numeric;
+            if let Some(n) = p.numeric.as_mut() {
+                n.min = get_f(&format!("{name}::min")).unwrap_or(n.min);
+                n.max = get_f(&format!("{name}::max")).unwrap_or(n.max);
+                n.mean = get_f(&format!("{name}::mean")).unwrap_or(n.mean);
+                n.std = get_f(&format!("{name}::std")).unwrap_or(n.std);
+            }
+        } else if dtype.is_temporal() {
+            p.kind = ColumnKind::Datetime;
+            p.min_time = get_s(&format!("{name}::tmin")).or(p.min_time);
+            p.max_time = get_s(&format!("{name}::tmax")).or(p.max_time);
+        } else if dtype.is_string() || dtype.is_categorical() {
+            p.kind = classify_string(distinct, non_null, p.mean_length.unwrap_or(0.0));
+        }
+        columns.push(p);
+    }
+    Ok(Profile {
+        version: PROFILE_VERSION,
+        dataset_id: dataset_id.to_owned(),
+        rows,
+        columns,
+        sample,
+        sampled_rows: Some(sampled.height() as u64),
     })
 }
 
@@ -335,6 +453,30 @@ mod tests {
         assert_eq!(num.histogram.iter().sum::<u64>(), n as u64);
         assert_eq!(p.column("plan").unwrap().top_values.len(), 3);
         assert_eq!(p.sample.len(), SAMPLE_ROWS);
+    }
+
+    #[test]
+    fn large_datasets_use_exact_aggregates_and_a_sample() {
+        let n = EXACT_LIMIT as usize + 100_000;
+        let df = df!(
+            "x" => (0..n).map(|i| if i % 10 == 0 { None } else { Some(i as f64) }).collect::<Vec<_>>(),
+            "plan" => (0..n).map(|i| ["a", "b", "c"][i % 3]).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("big.parquet");
+        ParquetWriter::new(std::fs::File::create(&path).unwrap())
+            .finish(&mut df.clone())
+            .unwrap();
+        let p = profile_parquet(&path, "big").unwrap();
+        assert_eq!(p.rows, n as u64);
+        assert!(p.sampled_rows.unwrap() <= SAMPLE_LIMIT);
+        let x = p.column("x").unwrap();
+        assert_eq!(x.null_count, (n as u64).div_ceil(10));
+        let num = x.numeric.as_ref().unwrap();
+        assert_eq!((num.min, num.max), (1.0, (n - 1) as f64));
+        let plan = p.column("plan").unwrap();
+        assert_eq!((plan.kind, plan.n_unique), (ColumnKind::Categorical, 3));
     }
 
     #[test]

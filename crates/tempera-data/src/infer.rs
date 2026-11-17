@@ -240,6 +240,7 @@ mod tests {
             rows: 100,
             columns: vec![c],
             sample: vec![],
+            sampled_rows: None,
         };
         infer_task(&spec, &profile).unwrap()
     }
@@ -299,6 +300,7 @@ mod tests {
             rows: 10,
             columns: vec![col("y", "i64", ColumnKind::Numeric, 3, &[3, 3, 4])],
             sample: vec![],
+            sampled_rows: None,
         };
         let r = infer_task(&spec, &profile).unwrap();
         assert_eq!((r.task, r.metric), (TaskType::Regression, Metric::Mae));

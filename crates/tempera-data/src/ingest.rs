@@ -171,7 +171,11 @@ pub fn sink_parquet(lf: LazyFrame, out: &Path) -> Result<()> {
         SinkDestination::File {
             target: SinkTarget::Path(PlRefPath::try_from_path(out)?),
         },
-        FileWriteFormat::Parquet(Arc::new(ParquetWriteOptions::default())),
+        FileWriteFormat::Parquet(Arc::new(ParquetWriteOptions {
+            // Bounded row groups: `None` means a single group, which buffers the whole file in memory.
+            row_group_size: Some(256 * 1024),
+            ..ParquetWriteOptions::default()
+        })),
         UnifiedSinkArgs::default(),
     )?
     .collect_with_engine(Engine::Streaming)?;
