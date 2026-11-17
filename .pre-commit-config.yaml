@@ -1,0 +1,22 @@
+# Install: `uv tool install pre-commit && pre-commit install`
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: ruff
+        name: ruff
+        entry: bash -c 'cd workers/python && uv run ruff check . && uv run ruff format --check .'
+        language: system
+        types: [python]
+        pass_filenames: false
