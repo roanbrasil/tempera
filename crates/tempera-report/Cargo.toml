@@ -1,0 +1,19 @@
+[package]
+name = "tempera-report"
+description = "Self-contained HTML report of a job (works offline)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tempera-core.workspace = true
+tempera-data = { path = "../tempera-data" }
+tempera-audit = { path = "../tempera-audit" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
