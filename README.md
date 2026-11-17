@@ -1,6 +1,18 @@
-# Têmpera
+<p align="center">
+  <img src="assets/logo.png" alt="Têmpera" width="560">
+</p>
 
-> **Train machine learning models the right way, on the cheapest machine that gets the job done.**
+<p align="center">
+  <strong>Train machine learning models the right way, on the cheapest machine that gets the job done.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/roanbrasil/tempera/actions/workflows/ci.yml"><img src="https://github.com/roanbrasil/tempera/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
+> **Why the name?** *Têmpera* is Portuguese for *tempering*: the heat treatment that turns brittle steel into
+> reliable steel. The logo is a steel ingot showing the real tempering colors (straw → bronze → purple → blue),
+> with a neural network running through it: raw data, tempered into a model you can trust. Built in Rust.
 
 Têmpera is an ML model training platform that takes you from a raw data file to an evaluated, ready-to-use model, without requiring you to be an expert in ML, infrastructure, or GPUs.
 
@@ -11,7 +23,16 @@ Têmpera is an ML model training platform that takes you from a raw data file to
 - 📈 **Tracks:** live metrics, ETA, and estimated vs. actual cost.
 - 📦 **Delivers:** an evaluated model, a report, and an artifact (ONNX/safetensors) ready to serve.
 
-> Status: **specification phase**. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
+> Status: **M0 · Foundation**. Contracts are in place (`tempera.yaml` schema, JSONL events, gRPC v1),
+> nothing trains yet. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
+
+## Quick look
+
+```bash
+cargo run --bin tempera -- validate examples/churn.yaml   # validate a job spec
+cargo run --bin tempera -- schema                         # JSON Schema of tempera.yaml
+cd workers/python && uv run tempera-worker run --algorithm dummy --params '{"steps": 5}'
+```
 
 ---
 
@@ -77,12 +98,13 @@ The documentation lives in [`docs/wiki`](docs/wiki/Home.md), mirrored to the Git
 | [Glossary](docs/wiki/Glossary.md) | Terms used in the project |
 | [Contributing](docs/wiki/Contributing.md) | Workflow, standards, how to run |
 
-## Planned repository layout
+## Repository layout
 
 ```
 tempera/
 ├── crates/
-│   ├── tempera-core/     # domain: Dataset, Job, Run, Spec, errors
+│   ├── tempera-core/     # domain: job spec, backend events, errors
+│   ├── tempera-proto/    # generated gRPC types (agent <-> server)
 │   ├── tempera-data/     # ingestion, profiling, splits (Polars/Arrow)
 │   ├── tempera-audit/    # statistical audit + SLM advisor
 │   ├── tempera-exec/     # Executor trait: Local, Ssh, Cloud
@@ -93,8 +115,11 @@ tempera/
 │   ├── tempera-serve/    # inference (ort / Candle)
 │   └── tempera-server/   # Axum API + embedded UI + CLI
 ├── workers/python/       # tempera_worker: PyTorch/HF/sklearn adapters
-├── proto/                # gRPC contracts
-├── ui/                   # SvelteKit (static build embedded in the binary)
+├── proto/                # gRPC contracts (.proto)
+├── schemas/              # JSON Schemas generated from tempera-core
+├── examples/             # example tempera.yaml specs
+├── ui/                   # SvelteKit (static build embedded in the binary), planned
+├── assets/               # logo and icon
 └── docs/
 ```
 
