@@ -1,19 +1,14 @@
-# Binary classification on tabular data with a group/time-aware split.
+# Binary classification with a planted leak. First run: the audit blocks on
+# `refund_amount`. Add it to `data.drop` (already done below) and run again.
 version: 1
 name: customer-churn
 data:
-  source: ./data/customers.parquet
+  source: ./data/churn.csv
   target: churned
-  time_column: reference_date
-  group_column: customer_id
-  sensitive: [gender, age_group]
+  time_column: signup_date
+  drop: [refund_amount]
 task:
-  type: binary_classification
   metric: pr_auc
 budget:
   max_cost: { amount: 2, currency: USD }
   max_time: 2h
-compute:
-  objective: cheapest_under
-  deadline: 2h
-  allow: [local, living-room-pc, runpod]

@@ -2,7 +2,7 @@
 version: 1
 name: support-bot-lora
 data:
-  source: ./data/support_chats.jsonl
+  source: ./data/support_chats.jsonl   # not shipped: LLM fine-tuning arrives in M5
   target: response
 task:
   type: llm_fine_tune

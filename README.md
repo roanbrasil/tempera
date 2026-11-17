@@ -23,16 +23,52 @@ Têmpera is an ML model training platform that takes you from a raw data file to
 - 📈 **Tracks:** live metrics, ETA, and estimated vs. actual cost.
 - 📦 **Delivers:** an evaluated model, a report, and an artifact (ONNX/safetensors) ready to serve.
 
-> Status: **M0 · Foundation**. Contracts are in place (`tempera.yaml` schema, JSONL events, gRPC v1),
-> nothing trains yet. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
+> Status: **M1 · Local tabular (CLI)**. Ingest → audit → split → train native + Python candidates
+> through the local agent → leaderboard → one-time test evaluation → HTML report. Web UI comes in M2.
+> See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
 
-## Quick look
+## Quick start
+
+Requirements: Rust (see `rust-toolchain.toml`) and, for LightGBM/XGBoost/random forest,
+[uv](https://docs.astral.sh/uv/). Without uv the Python candidates are skipped and the native Rust
+ones still run.
 
 ```bash
-cargo run --bin tempera -- validate examples/churn.yaml   # validate a job spec
-cargo run --bin tempera -- schema                         # JSON Schema of tempera.yaml
-cd workers/python && uv run tempera-worker run --algorithm dummy --params '{"steps": 5}'
+cargo build --release
+export PATH="$PWD/target/release:$PATH"
+
+cd examples
+tempera run churn.yaml        # binary classification, temporal split
+tempera run houses.yaml       # regression
+tempera runs                  # job history; `tempera runs <job>` for the leaderboard
+tempera report                # path of the latest HTML report
 ```
+
+What a run looks like (with the planted leak *not* dropped, the audit stops it first):
+
+```text
+  ● Audit     1 red · 2 yellow · 6 features used · 2 columns dropped
+      RED    A1:refund_amount       Probable target leakage · needs a decision
+             `refund_amount` alone predicts `churned` with single-feature AUC = 0.993.
+  ✗ Training blocked by the audit (policy: block_on_red).
+```
+
+After adding `refund_amount` to `data.drop`:
+
+```text
+  ● Split     temporal · train 1,918 · valid 480 · test 600 (held out)
+  ● Training  6 candidates · ranked by pr_auc on validation
+      ✓ majority (builtin)                 pr_auc   0.1917  0.0s
+      ✓ logistic_regression (native)       pr_auc   0.5401  0.5s
+      ✓ decision_tree (native)             pr_auc   0.3728  0.7s
+      ✓ random_forest (python)             pr_auc   0.4614  22.5s
+      ✓ lightgbm (python)                  pr_auc   0.4878  11.0s
+      ✓ xgboost (python)                   pr_auc   0.4930  12.7s
+  ● Winner    logistic_regression · test pr_auc = 0.5698 (evaluated once)
+```
+
+On your own data: `tempera init data.csv --target <column>` writes a `tempera.yaml`, then
+`tempera audit` and `tempera run`. State lives in `./.tempera` (override with `TEMPERA_HOME`).
 
 ---
 

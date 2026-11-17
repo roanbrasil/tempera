@@ -134,14 +134,17 @@ class Algorithm(Protocol):
     name: str
     tasks: set[TaskType]
 
-    def fit(self, train: pa.Table, valid: pa.Table | None, params: dict, ctx: RunContext) -> None: ...
+    def fit(self, train: pa.Table, valid: pa.Table | None, ctx: RunContext) -> None: ...
     def predict(self, data: pa.Table) -> pa.Table: ...
+    def save(self, model_dir: Path) -> None: ...
+    def load(self, model_dir: Path) -> None: ...
     def save_checkpoint(self, path: Path) -> None: ...
     def resume_from(self, path: Path) -> None: ...
     def export(self, path: Path, fmt: Literal["onnx", "safetensors", "native"]) -> Path: ...
 ```
 
-`ctx` exposes `ctx.log_metric()`, `ctx.should_stop()` (cancellation/budget), and `ctx.checkpoint_due()`.
+`ctx` carries the manifest data (`params`, `task`, `features`, `classes`, `seed`) and exposes
+`ctx.log_metric()`, `ctx.should_stop()` (cancellation/budget/preemption), and `ctx.checkpoint_due()`.
 
 ## 6. Algorithm trait (Rust)
 
@@ -156,3 +159,89 @@ pub trait Algorithm: Send {
     fn export(&self, path: &Path, fmt: ExportFormat) -> Result<PathBuf>;
 }
 ```
+
+## 7. Backend run manifest (M1)
+
+Both backends (Python `tempera_worker`, native `tempera-agent native`) are subprocesses with the same
+command-line contract. All inputs come in a JSON **manifest**; progress comes back as JSONL events
+(section 3). Metrics are **not** computed by backends: they write predictions, and Rust computes every
+metric in one place (`tempera_core::metrics`) so all algorithms are scored identically.
+
+```bash
+python -m tempera_worker fit     --manifest run.json   # train, then predict every entry in `predict`
+python -m tempera_worker predict --manifest pred.json  # load a saved model, predict
+tempera-agent native fit|predict --manifest ...        # same contract, Rust algorithms
+```
+
+### Model-ready Parquet (what backends read)
+
+Produced by `tempera-data` after the audit. Feature columns keep their original names and are already
+reduced to three kinds; special columns use reserved names and are **never** features:
+
+| Column | Meaning |
+|---|---|
+| `<feature>` | `numeric` (Float64/Int64), `categorical` (Utf8, nulls allowed), `boolean` |
+| `__target__` | Target. Utf8 for classification (labels as strings), Float64 for regression |
+| `__group__`, `__time__` | Kept for traceability only, not features |
+
+An empty string is treated as a missing categorical value (some ONNX converters need a string
+sentinel), so `""` must not be used as a real category.
+
+Datetime features are expanded in Rust (`<col>__year`, `__month`, `__dayofweek`, `__hour`). Free text and
+ID-like columns are dropped by the audit in M1.
+
+### `fit` manifest
+
+```json
+{
+  "algorithm": "lightgbm",
+  "task": "binary_classification",
+  "classes": ["no", "yes"],
+  "positive_class": "yes",
+  "features": [
+    {"name": "tenure_months", "kind": "numeric"},
+    {"name": "plan", "kind": "categorical"},
+    {"name": "has_discount", "kind": "boolean"}
+  ],
+  "params": {"num_leaves": 31},
+  "seed": 42,
+  "train": "/abs/splits/ab12/train.parquet",
+  "valid": "/abs/splits/ab12/valid.parquet",
+  "predict": [{"input": "/abs/splits/ab12/valid.parquet", "output": "/abs/run/valid_pred.parquet"}],
+  "work_dir": "/abs/run",
+  "export": ["onnx", "native"]
+}
+```
+
+- `classes` is the sorted label list (classification only); `positive_class` is set for binary tasks.
+- `valid` may be used for early stopping. The **test set never appears in a `fit` manifest.**
+- Optional `"resume_from": "/abs/run/ckpt"` continues training from a checkpoint (a backend stopped by
+  SIGTERM saves `<work_dir>/ckpt/`, emits a `checkpoint` event and exits with code 3).
+- The model is saved under `<work_dir>/model/` (a `model.json` descriptor plus algorithm files).
+  The `artifact` event of kind `model` / format `native` points at that **directory** (what a predict
+  manifest's `model_dir` takes); other formats (e.g. `onnx`) point at the file. Each predictions file is
+  announced with an `artifact` event of kind `predictions`.
+- Backends that cannot export a requested format emit a `log` warning and continue; they never fail
+  the run for it.
+  Each exported file is announced with an `artifact` event.
+
+### `predict` manifest
+
+```json
+{"algorithm": "lightgbm", "task": "binary_classification", "model_dir": "/abs/run/model",
+ "input": "/abs/splits/ab12/test.parquet", "output": "/abs/run/test_pred.parquet"}
+```
+
+### Predictions Parquet
+
+Same row order as the input.
+
+| Task | Columns |
+|---|---|
+| Classification | `prediction` (Utf8 label) + `proba__<label>` (Float64) for **every** class |
+| Regression | `prediction` (Float64) |
+
+### Exit codes
+
+`0` success (a `done` event was emitted) · `1` unexpected error · `2` bad manifest / unknown algorithm ·
+`3` stopped by signal (checkpoint saved when supported).

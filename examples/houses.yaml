@@ -1,4 +1,4 @@
-# Smallest valid spec: everything else is inferred or defaulted.
+# Regression: predict a house price.
 version: 1
 name: house-prices
 data:
