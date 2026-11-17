@@ -1,31 +1,31 @@
 # Têmpera Wiki
 
-> Treine modelos de ML do jeito certo, na máquina mais barata que resolve.
+> Train ML models the right way, on the cheapest machine that gets the job done.
 
-## Comece aqui
+## Start here
 
-1. **[Visão e Problema](Visao-e-Problema.md)**: para quem é, que dor resolve, o que não fazemos.
-2. **[Jornada do Usuário](Jornada-do-Usuario.md)**: a experiência ponta a ponta.
-3. **[Arquitetura](Arquitetura.md)**: como o sistema é montado.
-4. **[Roadmap](Roadmap.md)**: em que ordem vamos construir.
+1. **[Vision and Problem](Vision-and-Problem.md)**: who it is for, what pain it solves, what we don't do.
+2. **[User Journey](User-Journey.md)**: the end-to-end experience.
+3. **[Architecture](Architecture.md)**: how the system is put together.
+4. **[Roadmap](Roadmap.md)**: the order in which we will build it.
 
-## Referência técnica
+## Technical reference
 
-- [Auditoria de Dados](Auditoria-de-Dados.md): viés, vazamento, qualidade; papel do SLM
-- [Catálogo de Algoritmos](Catalogo-de-Algoritmos.md): algoritmos × backends
-- [Execução e Máquinas](Execucao-e-Maquinas.md): local, SSH/LAN, nuvem, agente
-- [Custo e Estimativa](Custo-e-Estimativa.md): ETA, memória, custo, economia
-- [Contratos e Especificações](Contratos.md): `tempera.yaml`, gRPC, Arrow
-- [Segurança e Privacidade](Seguranca.md)
-- [Stack Tecnológica](Stack-Tecnologica.md)
-- [Decisões de Arquitetura (ADRs)](../adr/README.md)
-- [Glossário](Glossario.md)
-- [Contribuindo](Contribuindo.md)
+- [Data Audit](Data-Audit.md): bias, leakage, quality; role of the SLM
+- [Algorithm Catalog](Algorithm-Catalog.md): algorithms × backends
+- [Execution and Machines](Execution-and-Machines.md): local, SSH/LAN, cloud, agent
+- [Cost and Estimation](Cost-and-Estimation.md): ETA, memory, cost, savings
+- [Contracts and Specifications](Contracts.md): `tempera.yaml`, gRPC, Arrow
+- [Security and Privacy](Security.md)
+- [Tech Stack](Tech-Stack.md)
+- [Architecture Decisions (ADRs)](../adr/README.md)
+- [Glossary](Glossary.md)
+- [Contributing](Contributing.md)
 
-## Os 5 princípios
+## The 5 principles
 
-1. **Correto antes de rápido.** Um modelo treinado em dados vazados é dinheiro jogado fora. A auditoria vem antes do treino.
-2. **Barato por padrão.** Começa no baseline mais simples, usa a máquina que você já tem e só sobe para GPU paga quando os números justificam.
-3. **Estatística decide, LLM explica.** O SLM é conselheiro e nunca seleciona dados sozinho.
-4. **Melhor ferramenta para cada parte.** Rust para sistema, Python para o ecossistema de ML, com contratos claros entre os dois.
-5. **Local-first e privado.** Nada sai da sua infraestrutura sem você mandar.
+1. **Correct before fast.** A model trained on leaked data is money thrown away. The audit comes before training.
+2. **Cheap by default.** Start with the simplest baseline, use the machine you already have, and only move up to a paid GPU when the numbers justify it.
+3. **Statistics decide, the LLM explains.** The SLM is an advisor and never selects data on its own.
+4. **Best tool for each part.** Rust for the system, Python for the ML ecosystem, with clear contracts between the two.
+5. **Local-first and private.** Nothing leaves your infrastructure unless you say so.

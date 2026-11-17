@@ -1,29 +1,29 @@
-# Contratos e Especificações
+# Contracts and Specifications
 
-## 1. `tempera.yaml`: especificação de job
+## 1. `tempera.yaml`: job specification
 
-Fonte única de verdade de um experimento. A UI gera esse arquivo, a CLI consome e ele vai para o git.
+The single source of truth for an experiment. The UI generates this file, the CLI consumes it, and it goes into git.
 
 ```yaml
 version: 1
-name: churn-clientes
+name: customer-churn
 
 data:
-  source: ./dados/clientes.parquet          # ou s3://, postgres://, pasta
-  target: cancelou
-  time_column: data_referencia              # opcional → split temporal
-  group_column: cliente_id                  # opcional → split por grupo
-  sensitive: [genero, faixa_etaria]         # opcional → relatório de fairness
-  drop: [valor_estornado]                   # decisões da auditoria
+  source: ./data/customers.parquet          # or s3://, postgres://, folder
+  target: churned
+  time_column: reference_date               # optional → temporal split
+  group_column: customer_id                 # optional → group split
+  sensitive: [gender, age_group]            # optional → fairness report
+  drop: [chargeback_amount]                 # audit decisions
 
 task:
-  type: binary_classification               # inferido se omitido
+  type: binary_classification               # inferred if omitted
   metric: pr_auc
 
 audit:
   policy: block_on_red                      # block_on_red | warn_only
   advisor:
-    model: qwen3-4b-q4                      # SLM local
+    model: qwen3-4b-q4                      # local SLM
     remote: false
 
 split:
@@ -34,20 +34,20 @@ split:
 
 strategy:
   init: auto                                # auto | scratch | pretrained
-  candidates: auto                          # auto | lista de algoritmos
+  candidates: auto                          # auto | list of algorithms
   baseline: true
   hpo:
     method: asha
     max_trials: 30
 
 budget:
-  max_cost: { amount: 10, currency: BRL }
+  max_cost: { amount: 10, currency: USD }
   max_time: 2h
 
 compute:
   objective: cheapest_under                 # cheapest | fastest | cheapest_under
   deadline: 2h
-  allow: [local, pc-sala, runpod]           # máquinas/provedores permitidos
+  allow: [local, living-room-pc, runpod]    # allowed machines/providers
   spot: true
   max_restarts: 3
 
@@ -56,22 +56,22 @@ output:
   report: true
 ```
 
-O schema fica em JSON Schema (`schemas/tempera.schema.json`) e é validado na CLI e no server.
+The schema lives in JSON Schema (`schemas/tempera.schema.json`) and is validated in the CLI and on the server.
 
-## 2. gRPC: agente ↔ server
+## 2. gRPC: agent ↔ server
 
 ```protobuf
 syntax = "proto3";
 package tempera.agent.v1;
 
 service AgentControl {
-  // O agente abre um stream bidirecional e mantém a conexão.
+  // The agent opens a bidirectional stream and keeps the connection alive.
   rpc Connect(stream AgentMessage) returns (stream ServerMessage);
 }
 
 message AgentMessage {
   oneof msg {
-    Register     register   = 1;  // inventário de hardware, versão
+    Register     register   = 1;  // hardware inventory, version
     Heartbeat    heartbeat  = 2;
     MetricBatch  metrics    = 3;
     LogBatch     logs       = 4;
@@ -92,12 +92,12 @@ message ServerMessage {
 }
 ```
 
-- Versionamento: o pacote `v1` é compatível para frente; campos novos são sempre opcionais.
-- O agente informa `protocol_version` no `Register`. Se for incompatível, o server manda um `Shutdown` com instrução de atualização.
+- Versioning: the `v1` package is forward-compatible; new fields are always optional.
+- The agent reports `protocol_version` in `Register`. If it is incompatible, the server sends a `Shutdown` with update instructions.
 
-## 3. Eventos backend → agente (stdout JSONL)
+## 3. Backend → agent events (stdout JSONL)
 
-O backend (Python ou Rust) **não fala gRPC**. Ele escreve uma linha JSON por evento no stdout, o que mantém os adaptadores triviais:
+The backend (Python or Rust) **does not speak gRPC**. It writes one JSON line per event to stdout, which keeps adapters trivial:
 
 ```json
 {"t":"metric","step":120,"epoch":2,"name":"val/pr_auc","value":0.731,"ts":1763251200.1}
@@ -108,26 +108,26 @@ O backend (Python ou Rust) **não fala gRPC**. Ele escreve uma linha JSON por ev
 {"t":"done","summary":{"val/pr_auc":0.74}}
 ```
 
-O stderr é tratado como log bruto.
+stderr is treated as a raw log.
 
-## 4. Dados: layout Arrow/Parquet
+## 4. Data: Arrow/Parquet layout
 
 ```
 datasets/<sha256>/
-├── data.parquet          # dados normalizados (tipos inferidos)
-├── profile.json          # perfil estatístico
-├── audit.json            # achados da auditoria + decisões do usuário
+├── data.parquet          # normalized data (inferred types)
+├── profile.json          # statistical profile
+├── audit.json            # audit findings + user decisions
 └── splits/<split_hash>/
     ├── train.parquet
-    ├── valid.parquet     # ou folds/k=*.parquet
+    ├── valid.parquet     # or folds/k=*.parquet
     ├── test.parquet
-    └── split.json        # estratégia, seed, contagens
+    └── split.json        # strategy, seed, counts
 ```
 
-- Imagens e texto: o Parquet guarda **caminhos** e metadados, e os blobs ficam em `blobs/` endereçados por hash.
-- Convenções de schema: o alvo vai em `__target__`, o peso opcional em `__weight__`, o grupo em `__group__` e o tempo em `__time__`.
+- Images and text: Parquet stores **paths** and metadata, and the blobs live in `blobs/`, addressed by hash.
+- Schema conventions: the target goes in `__target__`, the optional weight in `__weight__`, the group in `__group__`, and the time in `__time__`.
 
-## 5. Protocolo de algoritmo (Python)
+## 5. Algorithm protocol (Python)
 
 ```python
 class Algorithm(Protocol):
@@ -141,9 +141,9 @@ class Algorithm(Protocol):
     def export(self, path: Path, fmt: Literal["onnx", "safetensors", "native"]) -> Path: ...
 ```
 
-`ctx` expõe `ctx.log_metric()`, `ctx.should_stop()` (cancelamento/orçamento) e `ctx.checkpoint_due()`.
+`ctx` exposes `ctx.log_metric()`, `ctx.should_stop()` (cancellation/budget), and `ctx.checkpoint_due()`.
 
-## 6. Trait de algoritmo (Rust)
+## 6. Algorithm trait (Rust)
 
 ```rust
 pub trait Algorithm: Send {

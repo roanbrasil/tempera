@@ -1,18 +1,18 @@
 ---
-name: Feature / tarefa
-about: Nova funcionalidade ou tarefa do roadmap
+name: Feature / task
+about: New feature or roadmap task
 labels: type:feature
 ---
 
-## Contexto
-<!-- Por que isso importa? Link para a página da wiki. -->
+## Context
+<!-- Why does this matter? Link to the wiki page. -->
 
-## Escopo
+## Scope
 - [ ] ...
 
-## Critérios de aceite
+## Acceptance criteria
 - [ ] ...
 
-## Fora de escopo
+## Out of scope
 
-## Dependências
+## Dependencies

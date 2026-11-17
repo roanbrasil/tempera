@@ -1,10 +1,10 @@
-## O que muda
+## What changes
 
 Closes #
 
-## Como testar
+## How to test
 
 ## Checklist
-- [ ] Testes adicionados/atualizados
-- [ ] Docs/wiki atualizadas se o comportamento mudou
-- [ ] ADR escrito se a decisão é estrutural
+- [ ] Tests added/updated
+- [ ] Docs/wiki updated if behavior changed
+- [ ] ADR written if the decision is structural

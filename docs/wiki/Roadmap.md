@@ -1,94 +1,94 @@
 # Roadmap
 
-Cada milestone entrega **algo usável de ponta a ponta**, não uma camada isolada.
+Each milestone delivers **something usable end to end**, not an isolated layer.
 
 ```mermaid
 gantt
   dateFormat  YYYY-MM-DD
   axisFormat  %b
-  section Fundação
-  M0 Fundação                 :m0, 2026-11-17, 2w
-  section Núcleo
-  M1 Tabular local (CLI)      :m1, after m0, 5w
-  M2 UI + acompanhamento      :m2, after m1, 4w
-  M3 Auditoria inteligente    :m3, after m1, 4w
-  section Máquinas
-  M4 LAN/SSH + agente         :m4, after m2, 4w
-  section Modelos
-  M5 Deep + pré-treinados     :m5, after m4, 6w
-  section Nuvem
-  M6 Nuvem barata             :m6, after m5, 5w
-  section Produto
+  section Foundation
+  M0 Foundation               :m0, 2026-11-17, 2w
+  section Core
+  M1 Local tabular (CLI)      :m1, after m0, 5w
+  M2 UI + monitoring          :m2, after m1, 4w
+  M3 Smart audit              :m3, after m1, 4w
+  section Machines
+  M4 LAN/SSH + agent          :m4, after m2, 4w
+  section Models
+  M5 Deep + pretrained        :m5, after m4, 6w
+  section Cloud
+  M6 Cheap cloud              :m6, after m5, 5w
+  section Product
   M7 Serving + beta           :m7, after m6, 4w
 ```
 
-> As datas são indicativas, assumindo 1 pessoa em tempo parcial com ajuda de IA. M2 e M3 podem andar em paralelo.
+> Dates are indicative, assuming 1 person part-time with AI assistance. M2 and M3 can proceed in parallel.
 
-## M0: Fundação
-**Entrega:** repositório estruturado, CI verde, contratos definidos.
-- Workspace Cargo com os crates vazios e fronteiras definidas
-- Pacote Python `tempera_worker` com `uv`
+## M0: Foundation
+**Delivers:** structured repository, green CI, defined contracts.
+- Cargo workspace with empty crates and defined boundaries
+- `tempera_worker` Python package with `uv`
 - CI (Rust + Python), `cargo deny`, pre-commit
-- JSON Schema do `tempera.yaml`, `.proto` v1, formato JSONL de eventos
-- ADRs 0001–0006 aceitos
+- `tempera.yaml` JSON Schema, `.proto` v1, JSONL event format
+- ADRs 0001–0006 accepted
 
-## M1: Tabular local (CLI)
-**Entrega:** `tempera run tempera.yaml` treina um modelo tabular **correto** na máquina local e gera um relatório.
-- Ingestão CSV/Parquet → Parquet normalizado, com hash de conteúdo
+## M1: Local tabular (CLI)
+**Delivers:** `tempera run tempera.yaml` trains a **correct** tabular model on the local machine and generates a report.
+- CSV/Parquet ingestion → normalized Parquet, with content hashing
 - Profiling
-- Auditoria estatística básica (A1, A2, A4, A5, A10)
-- Splits (estratificado, grupo, temporal), com o teste tocado uma única vez
-- Backends: nativo (linfa: linear, logística, árvore) e Python (sklearn, LightGBM, XGBoost)
-- Baseline + candidatos + leaderboard
-- Tracking em SQLite, relatório HTML
-- Executor local + agente local (já com o protocolo gRPC real)
+- Basic statistical audit (A1, A2, A4, A5, A10)
+- Splits (stratified, group, temporal), with the test set touched only once
+- Backends: native (linfa: linear, logistic, tree) and Python (sklearn, LightGBM, XGBoost)
+- Baseline + candidates + leaderboard
+- Tracking in SQLite, HTML report
+- Local executor + local agent (already using the real gRPC protocol)
 
-## M2: UI + acompanhamento
-**Entrega:** a jornada inteira pelo navegador, com métricas ao vivo e ETA.
-- Server Axum + WebSocket + UI SvelteKit embutida
-- Telas: dados, objetivo, auditoria, estratégia, máquina, treino ao vivo, resultado
-- ETA online (warm-up + EMA)
-- Cancelar / parar e usar o melhor checkpoint
-- HPO com ASHA; algoritmos M2 do catálogo (CatBoost, kNN, SVM, clusterização, séries temporais com GBM)
+## M2: UI + monitoring
+**Delivers:** the whole journey in the browser, with live metrics and ETA.
+- Axum server + WebSocket + embedded SvelteKit UI
+- Screens: data, objective, audit, strategy, machine, live training, result
+- Online ETA (warm-up + EMA)
+- Cancel / stop and use the best checkpoint
+- HPO with ASHA; M2 algorithms from the catalog (CatBoost, kNN, SVM, clustering, time series with GBM)
 
-## M3: Auditoria inteligente
-**Entrega:** auditoria completa, com o SLM local explicando e sugerindo.
-- Checagens A3, A6, A7, A8, A9, A11, A12, A13
-- Integração com Cleanlab e Fairlearn via worker
-- Conselheiro SLM com mistral.rs (download e gestão de modelos, saída JSON validada)
-- Benchmark de auditoria com problemas plantados (na CI)
-- Benchmark de SLMs para classificação de colunas → escolha do padrão
+## M3: Smart audit
+**Delivers:** a complete audit, with the local SLM explaining and suggesting.
+- Checks A3, A6, A7, A8, A9, A11, A12, A13
+- Cleanlab and Fairlearn integration via the worker
+- SLM advisor with mistral.rs (model download and management, validated JSON output)
+- Audit benchmark with planted problems (in CI)
+- SLM benchmark for column classification → choice of the default
 
-## M4: LAN/SSH + agente remoto
-**Entrega:** "use aquele PC com GPU da sala" funciona com 1 cadastro.
-- `SshExecutor` (russh), bootstrap do agente com verificação de assinatura
-- Inventário de hardware (NVML), telemetria de GPU
-- Provisionamento de Python remoto com `uv` + cache
-- Cache de dados por hash no worker
-- Checkpoint/retomada genéricos
-- Descoberta mDNS (opcional)
+## M4: LAN/SSH + remote agent
+**Delivers:** "use that GPU PC in the living room" works with a single registration.
+- `SshExecutor` (russh), agent bootstrap with signature verification
+- Hardware inventory (NVML), GPU telemetry
+- Remote Python provisioning with `uv` + caching
+- Data caching by hash on the worker
+- Generic checkpointing/resumption
+- mDNS discovery (optional)
 
-## M5: Deep learning + pré-treinados
-**Entrega:** classificação de imagem/texto e fine-tune de LLM com LoRA, com recomendação entre "do zero" e "pré-treinado".
-- Adaptadores PyTorch: visão (timm), texto (HF), LLM (PEFT/Unsloth)
-- Backend nativo Burn (MLP, CNN pequena)
-- Estimativa de memória (pesos, otimizador, ativações via profiling)
-- Recomendador "do zero × pré-treinado" com justificativa
-- Export ONNX/safetensors; bloqueio de pickle
+## M5: Deep learning + pretrained models
+**Delivers:** image/text classification and LLM fine-tuning with LoRA, with a recommendation between "from scratch" and "pretrained".
+- PyTorch adapters: vision (timm), text (HF), LLM (PEFT/Unsloth)
+- Burn native backend (MLP, small CNN)
+- Memory estimation (weights, optimizer, activations via profiling)
+- "From scratch × pretrained" recommender with justification
+- ONNX/safetensors export; pickle blocking
 
-## M6: Nuvem barata
-**Entrega:** "rode no mais barato que termina em 2 h" com GPU alugada, sem sustos.
-- Providers RunPod e Vast.ai
-- Catálogo de preços sincronizado
-- Estimativa de custo e recomendação de máquina
-- Spot + retomada automática após preempção
-- Teto de orçamento, desligamento automático, reaper de órfãs, conciliação de custo
-- Relatório de "economia vs. execução ingênua"
+## M6: Cheap cloud
+**Delivers:** "run on the cheapest option that finishes within 2 h" with a rented GPU, with no surprises.
+- RunPod and Vast.ai providers
+- Synced price catalog
+- Cost estimation and machine recommendation
+- Spot + automatic resumption after preemption
+- Budget cap, auto-shutdown, orphan reaper, cost reconciliation
+- "Savings vs. naive run" report
 
 ## M7: Serving + beta
-**Entrega:** produto instalável por terceiros.
-- `tempera serve`: endpoint HTTP de inferência (ort/Candle)
-- Modo servidor de time: auth e papéis
-- Instalador (`cargo-dist`), documentação de usuário, exemplos
-- Programa beta com 5–10 usuários reais por persona
-- Decisão de licença e modelo de negócio
+**Delivers:** a product that third parties can install.
+- `tempera serve`: HTTP inference endpoint (ort/Candle)
+- Team server mode: auth and roles
+- Installer (`cargo-dist`), user documentation, examples
+- Beta program with 5–10 real users per persona
+- License and business model decision

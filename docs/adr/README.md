@@ -1,12 +1,12 @@
 # Architecture Decision Records
 
-| ADR | Título | Status |
+| ADR | Title | Status |
 |---|---|---|
-| [0001](0001-hibrido-rust-python.md) | Arquitetura híbrida Rust (sistema) + Python (ecossistema ML) | Aceito |
-| [0002](0002-arrow-contrato-de-dados.md) | Apache Arrow/Parquet como contrato de dados | Aceito |
-| [0003](0003-fronteira-de-processo.md) | Fronteira de processo (subprocesso + JSONL) em vez de FFI | Aceito |
-| [0004](0004-slm-conselheiro.md) | SLM como conselheiro, estatística como decisora | Aceito |
-| [0005](0005-persistencia.md) | SQLite + FS local primeiro, atrás de traits | Aceito |
-| [0006](0006-ui-sveltekit.md) | UI em SvelteKit estático embutido no binário | Aceito |
+| [0001](0001-hybrid-rust-python.md) | Hybrid architecture: Rust (system) + Python (ML ecosystem) | Accepted |
+| [0002](0002-arrow-data-contract.md) | Apache Arrow/Parquet as the data contract | Accepted |
+| [0003](0003-process-boundary.md) | Process boundary (subprocess + JSONL) instead of FFI | Accepted |
+| [0004](0004-slm-advisor.md) | SLM as advisor, statistics as decision-maker | Accepted |
+| [0005](0005-persistence.md) | SQLite + local FS first, behind traits | Accepted |
+| [0006](0006-ui-sveltekit.md) | Static SvelteKit UI embedded in the binary | Accepted |
 
-Novo ADR: copie o [template](template.md) com o próximo número.
+New ADR: copy the [template](template.md) with the next number.

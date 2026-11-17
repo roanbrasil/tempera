@@ -1,19 +1,19 @@
 ---
 name: Bug
-about: Algo não funciona como esperado
+about: Something does not work as expected
 labels: type:bug
 ---
 
-## O que aconteceu
+## What happened
 
-## O que era esperado
+## What was expected
 
-## Como reproduzir
+## How to reproduce
 1.
 
-## Ambiente
-- Versão do tempera:
-- SO / GPU:
-- Executor (local/ssh/nuvem):
+## Environment
+- tempera version:
+- OS / GPU:
+- Executor (local/ssh/cloud):
 
 ## Logs

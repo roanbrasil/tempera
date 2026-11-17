@@ -1,17 +1,17 @@
-# ADR-NNNN: Título
+# ADR-NNNN: Title
 
-- **Status:** Proposto | Aceito | Substituído por ADR-XXXX
-- **Data:** AAAA-MM-DD
+- **Status:** Proposed | Accepted | Superseded by ADR-XXXX
+- **Date:** YYYY-MM-DD
 
-## Contexto
-Qual problema/força motivou a decisão?
+## Context
+What problem/force motivated the decision?
 
-## Decisão
-O que decidimos.
+## Decision
+What we decided.
 
-## Alternativas consideradas
-- Opção A: prós/contras
-- Opção B: prós/contras
+## Alternatives considered
+- Option A: pros/cons
+- Option B: pros/cons
 
-## Consequências
-Positivas, negativas, e o que passa a ser necessário.
+## Consequences
+Positive, negative, and what becomes necessary.

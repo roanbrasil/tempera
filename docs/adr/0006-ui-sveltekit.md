@@ -1,19 +1,19 @@
-# ADR-0006: UI em SvelteKit estático embutido no binário
+# ADR-0006: Static SvelteKit UI embedded in the binary
 
-- **Status:** Aceito
-- **Data:** 2026-11-16
+- **Status:** Accepted
+- **Date:** 2026-11-16
 
-## Contexto
-Queremos uma UI rica (gráficos ao vivo, formulários guiados) sem perder o binário único.
+## Context
+We want a rich UI (live charts, guided forms) without giving up the single binary.
 
-## Decisão
-SvelteKit com `adapter-static`; o build é embutido no `tempera-server` via `rust-embed`. Gráficos com uPlot (ao vivo) e ECharts (relatórios).
+## Decision
+SvelteKit with `adapter-static`; the build is embedded in `tempera-server` via `rust-embed`. Charts with uPlot (live) and ECharts (reports).
 
-## Alternativas consideradas
-- Leptos/Dioxus (Rust): uma linguagem só, mas ecossistema de componentes menor e iteração mais lenta.
-- Tauri desktop: possível no futuro **reaproveitando** a mesma UI.
-- React: viável; Svelte é mais leve para este escopo.
+## Alternatives considered
+- Leptos/Dioxus (Rust): a single language, but a smaller component ecosystem and slower iteration.
+- Tauri desktop: possible in the future, **reusing** the same UI.
+- React: viable; Svelte is lighter for this scope.
 
-## Consequências
-- (+) Iteração rápida de UI e binário único mantido.
-- (−) Uma terceira linguagem (TypeScript) no repositório.
+## Consequences
+- (+) Fast UI iteration and the single binary is preserved.
+- (−) A third language (TypeScript) in the repository.
