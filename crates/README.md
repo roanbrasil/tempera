@@ -16,19 +16,26 @@ flowchart BT
   agent[tempera-agent<br/>bin] --> core
   agent --> proto
   agent --> native
+  native --> core
   server[tempera / tempera-server<br/>bin] --> core
   server --> proto
-  server --> data & audit & cost & track & exec & serve
+  report[tempera-report] --> data & audit
+  server --> data & audit & track & exec & report & native
 ```
 
-Arrows show the **planned** dependencies (`A --> B` means A depends on B). `tempera-core` is the base and
-depends on no other workspace crate. Today only `core` and `proto` have real code; the others are
-placeholders with their responsibility documented in `src/lib.rs`.
+Arrows show the dependencies (`A --> B` means A depends on B). `tempera-core` is the base and depends
+on no other workspace crate.
 
-| Crate | Status |
+| Crate | Status (M1) |
 |---|---|
-| `tempera-core` | ✅ `tempera.yaml` types + validation, JSONL events, schema generation |
+| `tempera-core` | ✅ `tempera.yaml` types + validation, JSONL events, metrics, schema generation |
 | `tempera-proto` | ✅ gRPC protocol v1 (compiled with protox, no `protoc` needed) |
-| `tempera-server` (bin `tempera`) | 🟡 `tempera validate`, `tempera schema` |
-| `tempera-agent` | 🟡 skeleton |
-| others | ⬜ planned (see milestones) |
+| `tempera-data` | ✅ ingestion (CSV/Parquet/JSONL, streaming), profiling, task inference, splits, evaluation |
+| `tempera-audit` | ✅ A1 leakage, A2 duplicates, A3/A4 split guards, A5 imbalance, A10 unusable columns, feature plan |
+| `tempera-native` | ✅ linfa backend: linear, ridge, logistic, decision tree |
+| `tempera-exec` | ✅ agent hub (gRPC) + local executor |
+| `tempera-agent` | ✅ runs native/Python backends as subprocesses, streams events |
+| `tempera-track` | ✅ SQLite: jobs, runs, metrics, artifacts, one-time test access |
+| `tempera-report` | ✅ self-contained HTML report |
+| `tempera-server` (bin `tempera`) | ✅ CLI + orchestrator; HTTP API and UI in M2 |
+| `tempera-cost`, `tempera-serve` | ⬜ planned (M5–M7) |

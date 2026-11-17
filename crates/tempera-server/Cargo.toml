@@ -1,6 +1,6 @@
 [package]
 name = "tempera-server"
-description = "Têmpera server: HTTP API, embedded UI, orchestrator and CLI."
+description = "Têmpera CLI and orchestrator (HTTP server and UI in M2)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,10 +14,24 @@ path = "src/main.rs"
 
 [dependencies]
 tempera-core.workspace = true
+tempera-proto.workspace = true
+tempera-data = { path = "../tempera-data" }
+tempera-audit = { path = "../tempera-audit" }
+tempera-exec = { path = "../tempera-exec" }
+tempera-native = { path = "../tempera-native" }
+tempera-report = { path = "../tempera-report" }
+tempera-track = { path = "../tempera-track" }
 anyhow.workspace = true
 clap.workspace = true
+polars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
