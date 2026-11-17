@@ -1,0 +1,25 @@
+[package]
+name = "tempera-proto"
+description = "Generated gRPC types for the agent <-> server protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-stream = { version = "0.1", features = ["net"] }
+
+[lints]
+workspace = true

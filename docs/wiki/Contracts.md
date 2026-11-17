@@ -66,7 +66,7 @@ package tempera.agent.v1;
 
 service AgentControl {
   // The agent opens a bidirectional stream and keeps the connection alive.
-  rpc Connect(stream AgentMessage) returns (stream ServerMessage);
+  rpc Session(stream AgentMessage) returns (stream ServerMessage);
 }
 
 message AgentMessage {

@@ -1,0 +1,209 @@
+// Têmpera agent <-> server control protocol, version 1.
+//
+// The agent always dials the server (works behind NAT; over SSH it goes
+// through a port forward) and keeps one bidirectional stream open.
+//
+// Compatibility rules for v1:
+//   * never renumber or reuse field numbers; mark removed ones `reserved`;
+//   * new fields are always optional for the receiver;
+//   * breaking changes go to a new package (`tempera.agent.v2`).
+syntax = "proto3";
+
+package tempera.agent.v1;
+
+service AgentControl {
+  // Long-lived session. The first agent message must be `Register`.
+  rpc Session(stream AgentMessage) returns (stream ServerMessage);
+}
+
+// ---------------------------------------------------------------- agent -> server
+
+message AgentMessage {
+  oneof msg {
+    Register register = 1;
+    Heartbeat heartbeat = 2;
+    MetricBatch metrics = 3;
+    LogBatch logs = 4;
+    CheckpointReady checkpoint = 5;
+    JobFinished finished = 6;
+    JobFailed failed = 7;
+    PreemptionNotice preemption = 8;
+    Progress progress = 9;
+  }
+}
+
+message Register {
+  uint32 protocol_version = 1;   // currently 1
+  string agent_version = 2;      // semver of the tempera-agent binary
+  string machine_id = 3;         // stable id assigned at bootstrap
+  string auth_token = 4;         // one-time bootstrap token, exchanged for a session
+  Hardware hardware = 5;
+  repeated string running_jobs = 6; // jobs to resume after a reconnect
+}
+
+message Hardware {
+  string os = 1;
+  string arch = 2;
+  uint32 cpu_cores = 3;
+  uint64 ram_bytes = 4;
+  uint64 disk_free_bytes = 5;
+  repeated Gpu gpus = 6;
+  bool python_available = 7;
+}
+
+message Gpu {
+  string name = 1;
+  uint64 vram_bytes = 2;
+  string driver_version = 3;
+  string cuda_version = 4;
+}
+
+message Heartbeat {
+  int64 unix_ms = 1;
+  repeated GpuUsage gpu_usage = 2;
+  float cpu_percent = 3;
+  uint64 ram_used_bytes = 4;
+}
+
+message GpuUsage {
+  uint32 index = 1;
+  float util_percent = 2;
+  uint64 vram_used_bytes = 3;
+  float temperature_c = 4;
+  float power_w = 5;
+}
+
+message Metric {
+  string name = 1;
+  double value = 2;
+  optional uint64 step = 3;
+  optional uint32 epoch = 4;
+  int64 unix_ms = 5;
+}
+
+message MetricBatch {
+  string job_id = 1;
+  string run_id = 2;
+  repeated Metric metrics = 3;
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_DEBUG = 1;
+  LOG_LEVEL_INFO = 2;
+  LOG_LEVEL_WARN = 3;
+  LOG_LEVEL_ERROR = 4;
+  // Raw stderr / non-event stdout from the backend.
+  LOG_LEVEL_RAW = 5;
+}
+
+message LogLine {
+  LogLevel level = 1;
+  string message = 2;
+  int64 unix_ms = 3;
+}
+
+message LogBatch {
+  string job_id = 1;
+  string run_id = 2;
+  repeated LogLine lines = 3;
+}
+
+message Progress {
+  string job_id = 1;
+  string run_id = 2;
+  uint64 step = 3;
+  optional uint64 total_steps = 4;
+}
+
+message CheckpointReady {
+  string job_id = 1;
+  string run_id = 2;
+  uint64 step = 3;
+  string uri = 4;            // where the agent uploaded it
+  string sha256 = 5;
+  uint64 size_bytes = 6;
+}
+
+message Artifact {
+  string kind = 1;           // model | report | predictions | other
+  string format = 2;         // onnx | safetensors | native | html ...
+  string uri = 3;
+  string sha256 = 4;
+}
+
+message JobFinished {
+  string job_id = 1;
+  string run_id = 2;
+  map<string, double> summary = 3;
+  repeated Artifact artifacts = 4;
+  uint64 wall_time_ms = 5;
+}
+
+message JobFailed {
+  string job_id = 1;
+  string run_id = 2;
+  string reason = 3;
+  bool retryable = 4;
+  string stderr_tail = 5;    // last lines of stderr, for the UI
+  optional int32 exit_code = 6;
+}
+
+message PreemptionNotice {
+  int64 deadline_unix_ms = 1; // when the provider will reclaim the machine
+}
+
+// ---------------------------------------------------------------- server -> agent
+
+message ServerMessage {
+  oneof msg {
+    Registered registered = 1;
+    StartJob start = 2;
+    CancelJob cancel = 3;
+    RequestCheckpoint checkpoint = 4;
+    Shutdown shutdown = 5;
+  }
+}
+
+message Registered {
+  string session_token = 1;
+  uint32 heartbeat_interval_s = 2;
+}
+
+message StartJob {
+  string job_id = 1;
+  string run_id = 2;
+  string spec_yaml = 3;          // the full tempera.yaml for reproducibility
+  string algorithm = 4;          // e.g. "lightgbm"
+  string params_json = 5;        // hyperparameters for this run
+  Backend backend = 6;
+  repeated DataRef data = 7;
+  optional string resume_from_uri = 8; // checkpoint to resume from
+  map<string, string> env = 9;   // injected only into the backend process
+}
+
+enum Backend {
+  BACKEND_UNSPECIFIED = 0;
+  BACKEND_NATIVE = 1;            // Rust (tempera-native)
+  BACKEND_PYTHON = 2;            // tempera_worker
+}
+
+message DataRef {
+  string role = 1;               // train | valid | test | fold-N
+  string uri = 2;
+  string sha256 = 3;             // cache key on the worker
+}
+
+message CancelJob {
+  string job_id = 1;
+  bool save_checkpoint = 2;      // "stop and keep best checkpoint"
+}
+
+message RequestCheckpoint {
+  string job_id = 1;
+}
+
+message Shutdown {
+  string reason = 1;
+  optional string upgrade_to_version = 2;
+}
