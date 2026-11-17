@@ -31,10 +31,24 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # async / rpc
 tokio = { version = "1", features = ["full"] }
 tonic = "0.14"
+tokio-stream = { version = "0.1", features = ["net"] }
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 prost = "0.14"
 protox = "0.10"
+
+# data
+polars = { version = "0.55", default-features = false, features = [
+    "lazy", "csv", "parquet", "json", "dtype-datetime", "dtype-date", "dtype-categorical",
+    "temporal", "strings", "is_in", "fmt", "abs", "cum_agg", "rank", "round_series",
+] }
+sha2 = "0.11"
+hex = "0.4"
+encoding_rs = "0.8"
+tempfile = "3"
+
+# persistence
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 
 # cli
 clap = { version = "4", features = ["derive", "env"] }

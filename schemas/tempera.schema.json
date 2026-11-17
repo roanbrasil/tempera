@@ -115,6 +115,13 @@
     "AuditSpec": {
       "type": "object",
       "properties": {
+        "acknowledge": {
+          "description": "Finding ids (e.g. `A4`, `A1:refund_amount`) the user reviewed and accepts.\nAcknowledged red findings no longer block training; the decision is recorded.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "advisor": {
           "$ref": "#/$defs/AdvisorSpec",
           "default": {

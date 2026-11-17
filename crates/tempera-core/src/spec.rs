@@ -142,6 +142,10 @@ pub struct AuditSpec {
     pub policy: AuditPolicy,
     #[serde(default)]
     pub advisor: AdvisorSpec,
+    /// Finding ids (e.g. `A4`, `A1:refund_amount`) the user reviewed and accepts.
+    /// Acknowledged red findings no longer block training; the decision is recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledge: Vec<String>,
 }
 
 impl Default for AuditSpec {
@@ -149,6 +153,7 @@ impl Default for AuditSpec {
         Self {
             policy: AuditPolicy::BlockOnRed,
             advisor: AdvisorSpec::default(),
+            acknowledge: Vec::new(),
         }
     }
 }
@@ -521,19 +526,22 @@ impl JobSpec {
     ///
     /// Errors point at the offending field path (e.g. `split.test_size`).
     pub fn from_yaml(text: &str) -> Result<Self, SpecError> {
-        // YAML → generic value first (syntax errors carry line/column), then
-        // value → typed spec through serde_path_to_error (type errors carry the
-        // field path, e.g. `split.folds`).
-        let value: serde_json::Value = serde_saphyr::from_str(text).map_err(|e| SpecError::Parse {
-            path: "<yaml>".to_owned(),
+        // Deserialize straight into the typed spec (so a column named `y` or
+        // `no` stays a string, not a YAML 1.1 boolean) and record the field
+        // path of the first error, e.g. `split.folds`.
+        let mut path = None;
+        let spec: JobSpec = serde_saphyr::with_deserializer_from_str(text, |de| {
+            serde_path_to_error::deserialize(de).map_err(|e| {
+                path = Some(e.path().to_string());
+                e.into_inner()
+            })
+        })
+        .map_err(|e| SpecError::Parse {
+            path: path
+                .clone()
+                .filter(|p| p != ".")
+                .unwrap_or_else(|| "<yaml>".to_owned()),
             message: e.to_string(),
-        })?;
-        let spec: JobSpec = serde_path_to_error::deserialize(value).map_err(|e| {
-            let path = e.path().to_string();
-            SpecError::Parse {
-                path,
-                message: e.into_inner().to_string(),
-            }
         })?;
         spec.validate()?;
         Ok(spec)
@@ -779,6 +787,17 @@ output:
         };
         let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();
         assert_eq!(paths, ["task.metric", "split.test_size", "compute.deadline"]);
+    }
+
+    #[test]
+    fn yaml11_boolean_words_stay_strings() {
+        for name in ["y", "n", "yes", "no", "on", "off"] {
+            let spec = JobSpec::from_yaml(&format!(
+                "version: 1\nname: t\ndata: {{ source: x.csv, target: {name}, drop: [{name}2] }}\n"
+            ))
+            .unwrap();
+            assert_eq!(spec.data.target.as_deref(), Some(name));
+        }
     }
 
     #[test]

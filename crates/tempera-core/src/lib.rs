@@ -3,6 +3,7 @@
 
 pub mod error;
 pub mod events;
+pub mod metrics;
 pub mod schema;
 pub mod spec;
 
