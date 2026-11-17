@@ -11,3 +11,6 @@ node_modules/
 /datasets/
 /artifacts/
 .DS_Store
+workers/python/.venv/
+.pytest_cache/
+.ruff_cache/
