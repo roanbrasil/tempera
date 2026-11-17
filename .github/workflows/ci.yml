@@ -54,7 +54,7 @@ jobs:
       - run: uv run pytest -q
 
   python-tabular:
-    name: Python worker extras (tabular install smoke test)
+    name: Python worker extras (tabular tests)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -66,4 +66,5 @@ jobs:
           enable-cache: true
           cache-dependency-glob: workers/python/uv.lock
       - run: uv sync --locked --extra tabular
-      - run: uv run python -c "import sklearn, lightgbm, xgboost, pyarrow, polars; print('ok')"
+      - run: uv run pyright
+      - run: uv run pytest -q

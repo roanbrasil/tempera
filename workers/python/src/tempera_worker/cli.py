@@ -1,65 +1,186 @@
-"""`python -m tempera_worker run ...`: entry point the agent invokes."""
+"""`python -m tempera_worker fit|predict --manifest PATH`: entry point the agent invokes.
+
+Contract: docs/wiki/Contracts.md, section 7. stdout carries only JSONL events (section 3); everything
+else (Python prints, native library output) is routed to stderr.
+
+Exit codes: 0 success (`done` emitted) · 1 unexpected error · 2 bad manifest / unknown algorithm ·
+3 stopped by signal (checkpoint saved when supported).
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-import tempfile
 import traceback
 from pathlib import Path
+from typing import IO, TYPE_CHECKING
 
 from tempera_worker import algorithms
 from tempera_worker.context import RunContext
 from tempera_worker.events import EventSink
+from tempera_worker.manifest import (
+    TARGET_COLUMN,
+    Feature,
+    FitManifest,
+    ManifestError,
+    PredictManifest,
+    load_fit,
+    load_predict,
+)
+from tempera_worker.protocol import MODEL_DESCRIPTOR
+
+if TYPE_CHECKING:
+    import pyarrow as pa
+
+    from tempera_worker.protocol import Algorithm
+
+EXIT_OK, EXIT_ERROR, EXIT_BAD_MANIFEST, EXIT_STOPPED = 0, 1, 2, 3
 
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tempera-worker")
     sub = p.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="train one run and stream JSONL events")
-    run.add_argument("--algorithm", required=True)
-    run.add_argument("--params", default="{}", help="hyperparameters as JSON")
-    run.add_argument("--spec", type=Path, help="tempera.yaml (kept for reproducibility)")
-    run.add_argument("--work-dir", type=Path)
-    run.add_argument("--resume-from", type=Path)
-    run.add_argument("--events", choices=["stdout"], default="stdout")
+    fit = sub.add_parser("fit", help="train, save the model, then predict every `predict` entry")
+    fit.add_argument("--manifest", type=Path, required=True)
+    predict = sub.add_parser("predict", help="load a saved model and predict one input")
+    predict.add_argument("--manifest", type=Path, required=True)
     sub.add_parser("list", help="list available algorithms")
     return p
+
+
+def _event_stream() -> IO[str]:
+    """Reserve the real stdout for events and point fd 1 (and `sys.stdout`) at stderr.
+
+    Native libraries (LightGBM, XGBoost) write straight to fd 1, so redirecting `sys.stdout` alone
+    would not keep the event stream clean.
+    """
+    sys.stdout.flush()
+    events_fd = os.dup(1)
+    os.dup2(2, 1)
+    sys.stdout = sys.stderr
+    return os.fdopen(events_fd, "w", buffering=1, encoding="utf-8")
+
+
+def read_table(path: Path, features: list[Feature], with_target: bool) -> pa.Table:
+    """Read only the feature columns (and `__target__`) of a model-ready Parquet file."""
+    import pyarrow.parquet as pq
+
+    try:
+        available = set(pq.read_schema(path).names)
+    except (OSError, ValueError) as e:
+        raise ManifestError(f"cannot read Parquet {path}: {e}") from None
+    columns = [f.name for f in features] + ([TARGET_COLUMN] if with_target else [])
+    missing = [c for c in columns if c not in available]
+    if missing:
+        raise ManifestError(f"{path} is missing columns: {', '.join(missing)}")
+    return pq.read_table(path, columns=columns)
+
+
+def _write_predictions(algo: Algorithm, data: pa.Table, output: Path, events: EventSink) -> None:
+    import pyarrow.parquet as pq
+
+    preds = algo.predict(data)
+    if preds.num_rows != data.num_rows:
+        raise RuntimeError(f"{algo.name} returned {preds.num_rows} predictions for {data.num_rows} rows")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(preds, output)
+    events.artifact("predictions", str(output))
+
+
+def _algorithm_class(name: str, task: str) -> type[Algorithm]:
+    cls = algorithms.get(name)
+    if task not in cls.tasks:
+        raise ManifestError(
+            f"`{name}` does not support task `{task}` (supports: {', '.join(sorted(cls.tasks))})"
+        )
+    return cls
+
+
+def run_fit(m: FitManifest, events: EventSink) -> int:
+    cls = _algorithm_class(m.algorithm, m.task)
+    m.work_dir.mkdir(parents=True, exist_ok=True)
+    ctx = RunContext(
+        events=events,
+        work_dir=m.work_dir,
+        params=dict(m.params),
+        resume_from=m.resume_from,
+        task=m.task,
+        features=list(m.features),
+        classes=list(m.classes),
+        seed=m.seed,
+    )
+    ctx.install_signal_handlers()
+
+    train = read_table(m.train, m.features, with_target=True)
+    valid = read_table(m.valid, m.features, with_target=True) if m.valid else None
+    events.log(
+        f"fit {m.algorithm} ({m.task}): {train.num_rows} train rows"
+        + (f", {valid.num_rows} valid rows" if valid is not None else "")
+        + f", {len(m.features)} features"
+    )
+
+    algo = cls()
+    if m.resume_from:
+        algo.resume_from(m.resume_from)
+        events.log(f"resumed from {m.resume_from}")
+    algo.fit(train, valid, ctx)
+    if ctx.should_stop():
+        events.error("stopped before completion; checkpoint saved when supported", retryable=True)
+        return EXIT_STOPPED
+
+    exported: list[Path] = []
+    if "onnx" in m.export:
+        try:
+            exported.append(algo.export(m.model_dir, "onnx"))
+        except Exception as e:  # conversion gaps must not fail the run
+            traceback.print_exc(file=sys.stderr)
+            events.log(f"ONNX export failed for `{m.algorithm}`: {type(e).__name__}: {e}", level="warn")
+    algo.save(m.model_dir)
+    events.artifact("model", str(m.model_dir), "native")
+    for path in exported:
+        events.artifact("model", str(path), "onnx")
+
+    for entry in m.predict:
+        _write_predictions(algo, read_table(entry.input, m.features, with_target=False), entry.output, events)
+    events.done({})
+    return EXIT_OK
+
+
+def run_predict(m: PredictManifest, events: EventSink) -> int:
+    try:
+        descriptor = json.loads((m.model_dir / MODEL_DESCRIPTOR).read_text())
+    except FileNotFoundError:
+        raise ManifestError(f"no {MODEL_DESCRIPTOR} in {m.model_dir}") from None
+    if descriptor.get("algorithm") != m.algorithm or descriptor.get("task") != m.task:
+        raise ManifestError(
+            f"{m.model_dir} holds a `{descriptor.get('algorithm')}` / `{descriptor.get('task')}` model, "
+            f"but the manifest asks for `{m.algorithm}` / `{m.task}`"
+        )
+    algo = _algorithm_class(m.algorithm, m.task).load(m.model_dir)
+    features = [Feature(f["name"], f["kind"]) for f in descriptor["features"]]
+    _write_predictions(algo, read_table(m.input, features, with_target=False), m.output, events)
+    events.done({})
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "list":
-        for name in sorted(algorithms.REGISTRY):
+        for name in algorithms.names():
             print(name)
-        return 0
+        return EXIT_OK
 
-    # Only events go to stdout; route stray prints from libraries to stderr.
-    events = EventSink(sys.stdout)
-    sys.stdout = sys.stderr
-
+    events = EventSink(_event_stream())
     try:
-        params = json.loads(args.params)
-        work_dir = args.work_dir or Path(tempfile.mkdtemp(prefix="tempera-"))
-        ctx = RunContext(events=events, work_dir=work_dir, params=params, resume_from=args.resume_from)
-        ctx.install_signal_handlers()
-        algo = algorithms.get(args.algorithm)()
-        if args.resume_from:
-            algo.resume_from(args.resume_from)
-            events.log(f"resumed from {args.resume_from}")
-        algo.fit(None, None, ctx)
-        if ctx.should_stop():
-            events.error("stopped before completion; checkpoint saved", retryable=True)
-            return 3
-        model = algo.export(work_dir / "out", "native")
-        events.artifact("model", str(model), "native")
-        events.done({})
-        return 0
-    except SystemExit as e:
+        if args.command == "fit":
+            return run_fit(load_fit(args.manifest), events)
+        return run_predict(load_predict(args.manifest), events)
+    except ManifestError as e:
         events.error(str(e))
-        return 2
+        return EXIT_BAD_MANIFEST
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         events.error(f"{type(e).__name__}: {e}")
-        return 1
+        return EXIT_ERROR
