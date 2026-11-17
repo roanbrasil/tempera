@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+/ui/build
+/ui/.svelte-kit
+.env
+*.parquet
+/datasets/
+/artifacts/
+.DS_Store
