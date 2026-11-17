@@ -1,0 +1,6 @@
+# Smallest valid spec: everything else is inferred or defaulted.
+version: 1
+name: house-prices
+data:
+  source: ./data/houses.csv
+  target: price

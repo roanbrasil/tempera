@@ -1,0 +1,19 @@
+# Binary classification on tabular data with a group/time-aware split.
+version: 1
+name: customer-churn
+data:
+  source: ./data/customers.parquet
+  target: churned
+  time_column: reference_date
+  group_column: customer_id
+  sensitive: [gender, age_group]
+task:
+  type: binary_classification
+  metric: pr_auc
+budget:
+  max_cost: { amount: 2, currency: USD }
+  max_time: 2h
+compute:
+  objective: cheapest_under
+  deadline: 2h
+  allow: [local, living-room-pc, runpod]

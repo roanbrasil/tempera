@@ -1,0 +1,502 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JobSpec",
+  "description": "A complete job specification (`tempera.yaml`).",
+  "type": "object",
+  "properties": {
+    "audit": {
+      "$ref": "#/$defs/AuditSpec",
+      "default": {
+        "advisor": {
+          "enabled": true,
+          "model": "qwen3-4b-q4",
+          "remote": false
+        },
+        "policy": "block_on_red"
+      }
+    },
+    "budget": {
+      "$ref": "#/$defs/BudgetSpec",
+      "default": {}
+    },
+    "compute": {
+      "$ref": "#/$defs/ComputeSpec",
+      "default": {
+        "max_restarts": 3,
+        "objective": "cheapest",
+        "spot": true
+      }
+    },
+    "data": {
+      "$ref": "#/$defs/DataSpec"
+    },
+    "name": {
+      "description": "Human-friendly job name (letters, digits, `-`, `_`).",
+      "type": "string"
+    },
+    "output": {
+      "$ref": "#/$defs/OutputSpec",
+      "default": {
+        "formats": [
+          "onnx"
+        ],
+        "report": true
+      }
+    },
+    "split": {
+      "$ref": "#/$defs/SplitSpec",
+      "default": {
+        "folds": 5,
+        "seed": 42,
+        "strategy": "auto",
+        "test_size": 0.2
+      }
+    },
+    "strategy": {
+      "$ref": "#/$defs/StrategySpec",
+      "default": {
+        "baseline": true,
+        "candidates": "auto",
+        "init": "auto"
+      }
+    },
+    "task": {
+      "$ref": "#/$defs/TaskSpec",
+      "default": {}
+    },
+    "version": {
+      "description": "Spec format version. Must be `1`.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "data"
+  ],
+  "$defs": {
+    "AdvisorSpec": {
+      "description": "The local SLM that explains audit findings. It advises; it never decides.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "model": {
+          "type": "string",
+          "default": "qwen3-4b-q4"
+        },
+        "remote": {
+          "description": "Allow a remote LLM API. Off by default for privacy.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "AuditPolicy": {
+      "oneOf": [
+        {
+          "description": "Red findings block training until the user decides.",
+          "type": "string",
+          "const": "block_on_red"
+        },
+        {
+          "description": "Findings never block; they are only reported.",
+          "type": "string",
+          "const": "warn_only"
+        }
+      ]
+    },
+    "AuditSpec": {
+      "type": "object",
+      "properties": {
+        "advisor": {
+          "$ref": "#/$defs/AdvisorSpec",
+          "default": {
+            "enabled": true,
+            "model": "qwen3-4b-q4",
+            "remote": false
+          }
+        },
+        "policy": {
+          "$ref": "#/$defs/AuditPolicy",
+          "default": "block_on_red"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BudgetSpec": {
+      "type": "object",
+      "properties": {
+        "max_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanDuration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Candidates": {
+      "description": "`auto` or a list of algorithm names.",
+      "oneOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "ComputeObjective": {
+      "type": "string",
+      "enum": [
+        "cheapest",
+        "fastest",
+        "cheapest_under"
+      ]
+    },
+    "ComputeSpec": {
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Allowed machines/providers. Empty means local only.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deadline": {
+          "description": "Required when `objective` is `cheapest_under`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HumanDuration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_restarts": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "objective": {
+          "$ref": "#/$defs/ComputeObjective",
+          "default": "cheapest"
+        },
+        "spot": {
+          "description": "Prefer interruptible (spot) instances on cloud providers.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "DataSpec": {
+      "description": "Where the data comes from and which columns play special roles.",
+      "type": "object",
+      "properties": {
+        "drop": {
+          "description": "Columns to drop (usually decisions taken during the audit).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "group_column": {
+          "description": "Entity column (e.g. `customer_id`); enables group splits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sensitive": {
+          "description": "Sensitive attributes used for the fairness report.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "description": "Path or URI (`./file.parquet`, `s3://...`, `postgres://...`, a folder).",
+          "type": "string"
+        },
+        "target": {
+          "description": "Column to predict. Optional for unsupervised tasks.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "time_column": {
+          "description": "Time column; enables temporal splits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ]
+    },
+    "ExportFormat": {
+      "type": "string",
+      "enum": [
+        "onnx",
+        "safetensors",
+        "native"
+      ]
+    },
+    "HpoMethod": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "random"
+          ]
+        },
+        {
+          "description": "Asynchronous successive halving: kills bad configs early.",
+          "type": "string",
+          "const": "asha"
+        }
+      ]
+    },
+    "HpoSpec": {
+      "type": "object",
+      "properties": {
+        "max_trials": {
+          "type": "integer",
+          "format": "uint32",
+          "default": 30,
+          "minimum": 0
+        },
+        "method": {
+          "$ref": "#/$defs/HpoMethod",
+          "default": "asha"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HumanDuration": {
+      "description": "Duration such as `90s`, `30m`, `2h`, `1d`.",
+      "type": "string",
+      "pattern": "^[0-9]+(s|m|h|d)$"
+    },
+    "InitMode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "scratch",
+        "pretrained"
+      ]
+    },
+    "Metric": {
+      "type": "string",
+      "enum": [
+        "roc_auc",
+        "pr_auc",
+        "f1",
+        "balanced_accuracy",
+        "accuracy",
+        "log_loss",
+        "rmse",
+        "mae",
+        "mape",
+        "mase",
+        "r2",
+        "silhouette",
+        "perplexity"
+      ]
+    },
+    "Money": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "number",
+          "format": "double"
+        },
+        "currency": {
+          "description": "ISO 4217 code, e.g. `USD`, `BRL`, `EUR`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "amount",
+        "currency"
+      ]
+    },
+    "OutputSpec": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "formats": {
+          "type": "array",
+          "default": [
+            "onnx"
+          ],
+          "items": {
+            "$ref": "#/$defs/ExportFormat"
+          }
+        },
+        "report": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "SplitSpec": {
+      "type": "object",
+      "properties": {
+        "folds": {
+          "description": "Cross-validation folds (>= 2).",
+          "type": "integer",
+          "format": "uint32",
+          "default": 5,
+          "minimum": 0
+        },
+        "seed": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 42,
+          "minimum": 0
+        },
+        "strategy": {
+          "$ref": "#/$defs/SplitStrategy",
+          "default": "auto"
+        },
+        "test_size": {
+          "description": "Fraction held out as the final test set, in (0, 0.5].",
+          "type": "number",
+          "format": "double",
+          "default": 0.2
+        }
+      },
+      "additionalProperties": false
+    },
+    "SplitStrategy": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "random",
+            "stratified",
+            "group",
+            "temporal"
+          ]
+        },
+        {
+          "description": "Picked from the audit: temporal > group > stratified > random.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
+    "StrategySpec": {
+      "type": "object",
+      "properties": {
+        "baseline": {
+          "description": "Always train cheap baselines first.",
+          "type": "boolean",
+          "default": true
+        },
+        "candidates": {
+          "description": "`auto` or an explicit list of algorithm names.",
+          "$ref": "#/$defs/Candidates",
+          "default": "auto"
+        },
+        "hpo": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HpoSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "init": {
+          "$ref": "#/$defs/InitMode",
+          "default": "auto"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskSpec": {
+      "type": "object",
+      "properties": {
+        "metric": {
+          "description": "Main metric. Recommended automatically when omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Metric"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "description": "Task type. Inferred from the data when omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskType": {
+      "type": "string",
+      "enum": [
+        "binary_classification",
+        "multiclass_classification",
+        "regression",
+        "time_series_forecast",
+        "clustering",
+        "anomaly_detection",
+        "image_classification",
+        "text_classification",
+        "llm_fine_tune"
+      ]
+    }
+  }
+}

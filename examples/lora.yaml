@@ -1,0 +1,20 @@
+# LoRA fine-tune of a small LLM on a rented spot GPU.
+version: 1
+name: support-bot-lora
+data:
+  source: ./data/support_chats.jsonl
+  target: response
+task:
+  type: llm_fine_tune
+  metric: perplexity
+strategy:
+  init: pretrained
+  candidates: [qlora]
+budget:
+  max_cost: { amount: 10, currency: USD }
+compute:
+  objective: cheapest
+  allow: [runpod, vast]
+  spot: true
+output:
+  formats: [safetensors]

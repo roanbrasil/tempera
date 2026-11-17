@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Event",
+  "oneOf": [
+    {
+      "description": "A scalar metric at a training step.",
+      "type": "object",
+      "properties": {
+        "epoch": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "t": {
+          "type": "string",
+          "const": "metric"
+        },
+        "ts": {
+          "description": "Unix timestamp (seconds) when the metric was produced.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "t",
+        "name",
+        "value"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/LogLevel",
+          "default": "info"
+        },
+        "msg": {
+          "type": "string"
+        },
+        "t": {
+          "type": "string",
+          "const": "log"
+        }
+      },
+      "required": [
+        "t",
+        "msg"
+      ]
+    },
+    {
+      "description": "Progress for ETA estimation.",
+      "type": "object",
+      "properties": {
+        "step": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "t": {
+          "type": "string",
+          "const": "progress"
+        },
+        "total_steps": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "t",
+        "step"
+      ]
+    },
+    {
+      "description": "A checkpoint was written and can be uploaded.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "step": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "t": {
+          "type": "string",
+          "const": "checkpoint"
+        }
+      },
+      "required": [
+        "t",
+        "path",
+        "step"
+      ]
+    },
+    {
+      "description": "A final artifact (model, report, ...).",
+      "type": "object",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExportFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "path": {
+          "type": "string"
+        },
+        "t": {
+          "type": "string",
+          "const": "artifact"
+        }
+      },
+      "required": [
+        "t",
+        "kind",
+        "path"
+      ]
+    },
+    {
+      "description": "The backend finished successfully.",
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          },
+          "default": {}
+        },
+        "t": {
+          "type": "string",
+          "const": "done"
+        }
+      },
+      "required": [
+        "t"
+      ]
+    },
+    {
+      "description": "The backend failed in a way it could describe.",
+      "type": "object",
+      "properties": {
+        "msg": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean",
+          "default": false
+        },
+        "t": {
+          "type": "string",
+          "const": "error"
+        }
+      },
+      "required": [
+        "t",
+        "msg"
+      ]
+    }
+  ],
+  "$defs": {
+    "ArtifactKind": {
+      "type": "string",
+      "enum": [
+        "model",
+        "report",
+        "predictions",
+        "other"
+      ]
+    },
+    "ExportFormat": {
+      "type": "string",
+      "enum": [
+        "onnx",
+        "safetensors",
+        "native"
+      ]
+    },
+    "LogLevel": {
+      "type": "string",
+      "enum": [
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ]
+    }
+  }
+}
