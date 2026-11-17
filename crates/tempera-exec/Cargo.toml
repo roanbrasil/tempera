@@ -1,5 +1,6 @@
 [package]
 name = "tempera-exec"
+description = "Agent control plane and executors (local; SSH and cloud later)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,12 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+tempera-proto.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

@@ -180,6 +180,14 @@ message StartJob {
   repeated DataRef data = 7;
   optional string resume_from_uri = 8; // checkpoint to resume from
   map<string, string> env = 9;   // injected only into the backend process
+  Command command = 10;
+  string manifest_json = 11;     // backend manifest (Contracts.md §7)
+}
+
+enum Command {
+  COMMAND_UNSPECIFIED = 0;
+  COMMAND_FIT = 1;
+  COMMAND_PREDICT = 2;
 }
 
 enum Backend {
