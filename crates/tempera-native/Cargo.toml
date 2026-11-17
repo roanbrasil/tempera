@@ -1,5 +1,6 @@
 [package]
 name = "tempera-native"
+description = "Native Rust backend (linfa): linear, ridge, logistic regression and decision trees."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +9,22 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+tempera-core = { path = "../tempera-core" }
+serde.workspace = true
+# `float_roundtrip` so a saved model reproduces fit-time predictions bit for bit.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+thiserror.workspace = true
+arrow = { version = "60.1.0", default-features = false }
+parquet = { version = "60.1.0", default-features = false, features = ["arrow", "snap", "zstd", "lz4"] }
+ndarray = "0.16.1"
+linfa = "0.8.1"
+linfa-linear = "0.8.1"
+linfa-logistic = "0.8.1"
+linfa-trees = "0.8.1"
+linfa-elasticnet = "0.8.1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
 
 [lints]
 workspace = true
