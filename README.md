@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/roanbrasil/tempera/actions/workflows/ci.yml"><img src="https://github.com/roanbrasil/tempera/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/roanbrasil/tempera/releases"><img src="https://img.shields.io/github/v/release/roanbrasil/tempera?include_prereleases" alt="Release"></a>
 </p>
 
 > **Why the name?** *Têmpera* is Portuguese for *tempering*: the heat treatment that turns brittle steel into
@@ -30,7 +31,21 @@ Têmpera is an ML model training platform that takes you from a raw data file to
 
 ## Quick start
 
-### Web UI
+### Install a release
+
+Pre-built archives for Linux (x86_64, arm64) and macOS (Apple Silicon, Intel) are on the
+[Releases](https://github.com/roanbrasil/tempera/releases) page:
+
+```bash
+tar -xzf tempera-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+cd tempera-v0.1.0-x86_64-unknown-linux-gnu
+./tempera up                         # http://127.0.0.1:7070
+```
+
+Keep `tempera-agent` and `workers/` next to `tempera`. Python algorithms need
+[uv](https://docs.astral.sh/uv/); the native Rust ones run without it.
+
+### Web UI (from source)
 
 ```bash
 (cd ui && npm ci && npm run build)   # Node 22; embeds into the binary
@@ -185,4 +200,4 @@ tempera/
 
 ## License
 
-To be decided (see the licensing issue). **Private** repository for now.
+To be decided (see the licensing issue). The repository is public; until a license is added, all rights are reserved.
