@@ -35,9 +35,9 @@ fn base_rows(n: u64, extra_header: &str, extra: impl Fn(u64, bool) -> String) ->
         let x2 = rng(i, 2) * 5.0;
         let label = x1 + rng(i, 3) * 8.0 > 9.0;
         let plan = ["basic", "pro", "team"][(rng(i, 4) * 3.0) as usize];
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "{x1:.3},{x2:.3},{plan},{}{}\n",
+            "{x1:.3},{x2:.3},{plan},{}{}",
             if label { "yes" } else { "no" },
             extra(i, label)
         );
@@ -200,7 +200,7 @@ fn cases() -> Vec<Case> {
 }
 
 fn run(dir: &Path, name: &str, csv: &str, spec_extra: &str, target: Option<&str>) -> AuditReport {
-    let p = dir.join(format!("{}.csv", name.replace(' ', "_").replace('/', "_")));
+    let p = dir.join(format!("{}.csv", name.replace([' ', '/'], "_")));
     std::fs::write(&p, csv).unwrap();
     let ds = ingest(&p, dir).unwrap();
     let profile = profile_dataset(&ds).unwrap();
