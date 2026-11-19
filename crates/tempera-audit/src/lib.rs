@@ -2,6 +2,8 @@
 //! the resulting [`FeaturePlan`]. Statistics decide; the SLM advisor (M3) only
 //! explains. See docs/wiki/Data-Audit.md and ADR-0004.
 
+pub mod advanced;
+
 use std::collections::{BTreeMap, HashMap};
 
 use polars::prelude::*;
@@ -280,6 +282,19 @@ pub fn audit(
         findings.extend(leakage(lf, &target, inference.task, &plan)?);
     }
 
+    // ---- M3: A3 entities, A12 small samples, A13 informative missingness ----
+    findings.extend(advanced::repeated_entities(profile, spec, &reserved));
+    if !target.is_empty() {
+        findings.extend(advanced::small_sample(profile, inference, &plan, &target));
+        findings.extend(advanced::informative_missingness(
+            ds.scan()?,
+            &target,
+            inference.task,
+            &plan,
+            profile,
+        )?);
+    }
+
     // ---- acknowledgements and policy ----
     for f in &mut findings {
         if f.resolution == Resolution::Unresolved
@@ -297,6 +312,21 @@ pub fn audit(
         plan,
         blocked,
     })
+}
+
+/// Adds post-split findings (A6 drift) and re-sorts; never changes `blocked`.
+pub fn add_findings(report: &mut AuditReport, spec: &JobSpec, extra: Vec<Finding>) {
+    for mut f in extra {
+        if spec.audit.acknowledge.iter().any(|a| a == &f.id || a == &f.check)
+            && f.resolution == Resolution::Unresolved
+        {
+            f.resolution = Resolution::Acknowledged;
+        }
+        report.findings.push(f);
+    }
+    report
+        .findings
+        .sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.id.cmp(&b.id)));
 }
 
 /// Writes `audit.json` next to the dataset.

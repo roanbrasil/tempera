@@ -186,7 +186,7 @@ async fn run_spec_inner(
         spec,
         ds,
         inference,
-        audit,
+        mut audit,
     } = prepared;
     print_audit(&audit);
     events::emit(
@@ -226,6 +226,24 @@ async fn run_spec_inner(
     stage(&job_id, "split", "building train / valid / test".into());
     let (spec2, ds2, plan, task) = (spec.clone(), ds.clone(), audit.plan.clone(), inference.task);
     let split = tokio::task::spawn_blocking(move || make_split(&ds2, &spec2, task, &plan)).await??;
+    // A6: does the held-out test set look like the training data?
+    let drift = {
+        let (train, test, features, strategy) = (
+            split.path(Partition::Train),
+            split.path(Partition::Test),
+            split.features.clone(),
+            split.strategy,
+        );
+        tokio::task::spawn_blocking(move || {
+            tempera_audit::advanced::drift(&train, &test, &features, strategy)
+        })
+        .await??
+    };
+    for f in &drift {
+        ui::finding(f);
+    }
+    tempera_audit::add_findings(&mut audit, &spec, drift);
+    tempera_audit::save(&ds, &audit)?;
     tracker
         .update_job_context(
             &job_id,
