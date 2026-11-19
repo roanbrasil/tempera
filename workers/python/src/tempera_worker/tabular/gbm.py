@@ -1,13 +1,14 @@
-"""Gradient boosting adapters: LightGBM and XGBoost.
+"""Gradient boosting adapters: LightGBM, XGBoost and CatBoost.
 
 * Native categorical support: categorical features are pandas `category` columns whose category list is
   fixed from the training set (stored in `model.json`); unseen values become missing.
 * Early stopping on `valid` when present; per-iteration loss is reported as `valid/<loss>` metrics
   (`train/<loss>` when there is no validation set) plus `progress` events.
 * Stop signals and long runs write a checkpoint under `<work_dir>/ckpt/`; `resume_from` continues
-  boosting from it.
+  boosting from it (LightGBM and XGBoost; CatBoost stops cleanly on a signal but has no checkpoints).
 * ONNX input: a single float32 tensor `input` of shape `[n, features]` in manifest order, with
-  categorical values as their index in the stored category list and NaN for missing/unknown.
+  categorical values as their index in the stored category list and NaN for missing/unknown
+  (CatBoost: tensor `features`, numeric features only).
 """
 
 from __future__ import annotations
@@ -16,17 +17,26 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import catboost as cb
 import lightgbm as lgb
 import numpy as np
+import pandas as pd
 import xgboost as xgb
 from xgboost.callback import EarlyStopping, TrainingCallback
 
 from tempera_worker.manifest import ManifestError
 from tempera_worker.tabular.base import TabularAlgorithm, default_threads, pop_int
-from tempera_worker.tabular.data import encode_target, gbm_frame, gbm_matrix, learn_categories
+from tempera_worker.tabular.data import (
+    MISSING_CATEGORY,
+    encode_target,
+    gbm_frame,
+    gbm_matrix,
+    learn_categories,
+    numeric_array,
+    string_values,
+)
 
 if TYPE_CHECKING:
-    import pandas as pd
     import pyarrow as pa
 
     from tempera_worker.context import RunContext
@@ -346,3 +356,164 @@ class XGBoostAlgorithm(GbmAlgorithm):
         onx = convert_xgboost(booster, initial_types=[("input", FloatTensorType([None, len(self.features)]))])
         self.onnx_meta = self._onnx_meta()
         return onx.SerializeToString()
+
+
+class _CatBoostCallback:
+    """Reports per-iteration metrics/progress and stops on signal (CatBoost `callbacks` protocol)."""
+
+    def __init__(self, ctx: RunContext, total: int) -> None:
+        self.ctx, self.total = ctx, total
+
+    def after_iteration(self, info: Any) -> bool:
+        step = int(info.iteration)  # CatBoost counts iterations from 1 here
+        metrics: dict[str, dict[str, list[float]]] = info.metrics
+        data_name = "validation" if "validation" in metrics else "learn"
+        prefix = "valid" if data_name == "validation" else "train"
+        for metric, values in metrics.get(data_name, {}).items():
+            if values:
+                self.ctx.log_metric(f"{prefix}/{metric}", float(values[-1]), step=step)
+        self.ctx.progress(step, self.total)
+        return not self.ctx.should_stop()
+
+
+class CatBoostAlgorithm(GbmAlgorithm):
+    """CatBoost with native categorical features (missing and unseen values share one category)."""
+
+    name: ClassVar[str] = "catboost"
+    native_file: ClassVar[str] = "model.cbm"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.model: cb.CatBoost | None = None
+
+    def _cb_frame(self, data: pa.Table) -> pd.DataFrame:
+        cols: dict[str, Any] = {}
+        for f in self.features:
+            if f.kind == "categorical":
+                known = set(self.categories[f.name])
+                values = [
+                    v if v is not None and v in known else MISSING_CATEGORY for v in string_values(data, f)
+                ]
+                cols[f.name] = pd.Series(values, dtype=object)
+            else:
+                cols[f.name] = numeric_array(data, f)
+        return pd.DataFrame(cols, columns=[f.name for f in self.features])
+
+    def _cat_features(self) -> list[str]:
+        return [f.name for f in self.features if f.kind == "categorical"]
+
+    def _fit(self, train: pa.Table, valid: pa.Table | None, ctx: RunContext) -> None:
+        if self._resume_model is not None:
+            raise ManifestError("`catboost` does not support resuming from a checkpoint")
+        self._prepare(train)
+        params, rounds, early = self._split_params()
+        if self.task == "binary_classification":
+            loss = "Logloss"
+        elif self.task == "multiclass_classification":
+            loss = "MultiClass"
+        else:
+            loss = "RMSE"
+        base: dict[str, Any] = {
+            "iterations": rounds,
+            "loss_function": loss,
+            "random_seed": self.seed,
+            "thread_count": default_threads(),
+            "allow_writing_files": False,
+            "verbose": False,
+        }
+        params = base | params
+        cls = cb.CatBoostClassifier if self.is_classification else cb.CatBoostRegressor
+        model = cls(**params)
+        y = encode_target(train, self.task, self.classes)
+        fit_kwargs: dict[str, Any] = {}
+        if valid is not None:
+            fit_kwargs["eval_set"] = cb.Pool(
+                self._cb_frame(valid),
+                label=encode_target(valid, self.task, self.classes),
+                cat_features=self._cat_features(),
+            )
+            fit_kwargs["use_best_model"] = True
+            if early > 0:
+                fit_kwargs["early_stopping_rounds"] = early
+        model.fit(
+            cb.Pool(self._cb_frame(train), label=y, cat_features=self._cat_features()),
+            callbacks=[_CatBoostCallback(ctx, int(params["iterations"]))],
+            **fit_kwargs,
+        )
+        self.model = model
+        self.best_iteration = int(model.tree_count_ or 0)
+
+    def resume_from(self, path: Path) -> None:
+        raise ManifestError("`catboost` does not support resuming from a checkpoint")
+
+    def save_checkpoint(self, path: Path) -> None:
+        raise NotImplementedError("`catboost` does not support checkpoints")
+
+    def _model(self) -> cb.CatBoost:
+        if self.model is None:
+            raise RuntimeError("model is not fitted")
+        return self.model
+
+    def _scatter(self, proba: np.ndarray, seen: list[int]) -> np.ndarray:
+        """The model only knows the classes seen in training; scatter into the full class list."""
+        out = np.zeros((proba.shape[0], len(self.classes)), dtype=np.float64)
+        out[:, seen] = proba
+        return out
+
+    def _seen_classes(self) -> list[int]:
+        classes: Any = self._model().classes_
+        return [int(c) for c in classes]
+
+    def _raw_predict(self, data: pa.Table) -> np.ndarray:
+        model = self._model()
+        frame = self._cb_frame(data)
+        if not self.is_classification:
+            return np.asarray(model.predict(frame), dtype=np.float64)
+        proba = np.asarray(model.predict(frame, prediction_type="Probability"), dtype=np.float64)
+        return self._scatter(proba, self._seen_classes())
+
+    def _save_booster(self, path: Path) -> None:
+        self._model().save_model(str(path), format="cbm")
+
+    def _load_native(self, path: Path) -> None:
+        model = cb.CatBoostClassifier() if self.is_classification else cb.CatBoostRegressor()
+        model.load_model(str(path), format="cbm")
+        self.model = model
+
+    def feature_importance(self) -> dict[str, float]:
+        values: Any = self._model().get_feature_importance()
+        return {f.name: float(v) for f, v in zip(self.features, values, strict=True)}
+
+    def _to_onnx(self) -> bytes:
+        import tempfile
+
+        if self._cat_features():
+            raise NotImplementedError("CatBoost cannot export categorical features to ONNX")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "model.onnx"
+            self._model().save_model(str(out), format="onnx")
+            data = out.read_bytes()
+        self.onnx_meta = {
+            "inputs": "single float32 tensor `features` [n, features] in `features` order, NaN = missing",
+            "outputs": {"label": "class index", "probabilities": "sequence of {class index: probability}"}
+            if self.is_classification
+            else {"predictions": "float32 [n]"},
+        }
+        return data
+
+    def onnx_feed(self, data: pa.Table) -> dict[str, np.ndarray]:
+        cols = [numeric_array(data, f) for f in self.features]
+        return {"features": np.column_stack(cols).astype(np.float32)}
+
+    def score_onnx(self, onnx_path: Path, data: pa.Table) -> np.ndarray:
+        import onnxruntime as ort
+
+        session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+        feed = self.onnx_feed(data)
+        if not self.is_classification:
+            (values,) = session.run(["predictions"], feed)
+            return np.asarray(values, dtype=np.float64).ravel()
+        maps: Any = session.run(["probabilities"], feed)[0]
+        seen = self._seen_classes()
+        proba = np.asarray([[float(m[c]) for c in seen] for m in maps], dtype=np.float64)
+        return self._scatter(proba.reshape(len(maps), len(seen)), seen)

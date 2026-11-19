@@ -1,4 +1,4 @@
-"""Backend run manifests (docs/wiki/Contracts.md, section 7).
+"""Backend run manifests (docs/wiki/Contracts.md, sections 7 and 8).
 
 The agent hands every input to a backend in a JSON manifest. Anything wrong with it (missing field, unknown
 task, missing file...) raises `ManifestError`, which the CLI turns into exit code 2.
@@ -11,10 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
-Task = Literal["binary_classification", "multiclass_classification", "regression"]
+Task = Literal[
+    "binary_classification", "multiclass_classification", "regression", "clustering", "anomaly_detection"
+]
 FeatureKind = Literal["numeric", "categorical", "boolean"]
 
-TASKS: frozenset[str] = frozenset({"binary_classification", "multiclass_classification", "regression"})
+CLASSIFICATION_TASKS: frozenset[str] = frozenset({"binary_classification", "multiclass_classification"})
+SUPERVISED_TASKS: frozenset[str] = CLASSIFICATION_TASKS | {"regression"}
+# Section 8: these never train on `__target__` (absent for clustering, evaluation-only for anomalies).
+UNSUPERVISED_TASKS: frozenset[str] = frozenset({"clustering", "anomaly_detection"})
+TASKS: frozenset[str] = SUPERVISED_TASKS | UNSUPERVISED_TASKS
 FEATURE_KINDS: frozenset[str] = frozenset({"numeric", "categorical", "boolean"})
 EXPORT_FORMATS: frozenset[str] = frozenset({"onnx", "native"})
 
@@ -59,7 +65,11 @@ class FitManifest:
 
     @property
     def is_classification(self) -> bool:
-        return self.task != "regression"
+        return self.task in CLASSIFICATION_TASKS
+
+    @property
+    def is_supervised(self) -> bool:
+        return self.task in SUPERVISED_TASKS
 
     @property
     def model_dir(self) -> Path:
@@ -131,6 +141,12 @@ def _features(raw: dict[str, Any]) -> list[Feature]:
 
 
 def _classes(raw: dict[str, Any], task: Task) -> tuple[list[str], str | None]:
+    if task in UNSUPERVISED_TASKS:
+        # `classes` is omitted; anomaly detection with labels may name the anomaly label (section 8).
+        positive = raw.get("positive_class")
+        if positive is not None and not isinstance(positive, str):
+            raise ManifestError("`positive_class` must be a string")
+        return [], positive
     if task == "regression":
         return [], None
     classes = raw.get("classes")

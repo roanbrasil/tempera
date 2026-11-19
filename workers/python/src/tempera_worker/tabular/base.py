@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 import numpy as np
 
-from tempera_worker.manifest import Feature, ManifestError, Task
+from tempera_worker.manifest import CLASSIFICATION_TASKS, SUPERVISED_TASKS, Feature, ManifestError, Task
 from tempera_worker.protocol import MODEL_DESCRIPTOR, ExportFormat
 from tempera_worker.tabular.data import classification_predictions, regression_predictions
 
@@ -19,8 +19,7 @@ if TYPE_CHECKING:
 
     from tempera_worker.context import RunContext
 
-CLASSIFICATION_TASKS: frozenset[str] = frozenset({"binary_classification", "multiclass_classification"})
-ALL_TASKS: frozenset[str] = CLASSIFICATION_TASKS | {"regression"}
+ALL_TASKS: frozenset[str] = SUPERVISED_TASKS
 DESCRIPTOR_VERSION = 1
 ONNX_FILE = "model.onnx"
 ONNX_TOLERANCE = 1e-5

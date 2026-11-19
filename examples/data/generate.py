@@ -95,11 +95,17 @@ def transactions(n: int = 4000) -> None:
     rows = []
     for _ in range(n):
         fraud = rng.random() < 0.015
-        if fraud:
-            amount = round(rng.uniform(800, 5000), 2)
-            hour = rng.choice([1, 2, 3, 4])
-            km = round(rng.uniform(300, 4000), 1)
-            tries = rng.randint(2, 6)
+        if fraud and rng.random() < 0.4:
+            # Camouflaged fraud: normal amount and hour, only one odd signal.
+            amount = round(math.exp(rng.gauss(3.8, 0.8)), 2)
+            hour = int(min(23, max(0, rng.gauss(14, 4))))
+            km = round(rng.uniform(40, 600), 1)
+            tries = rng.choice([1, 2])
+        elif fraud:
+            amount = round(rng.uniform(300, 5000), 2)
+            hour = rng.choice([0, 1, 2, 3, 4, 22, 23])
+            km = round(rng.uniform(100, 4000), 1)
+            tries = rng.randint(1, 6)
         else:
             amount = round(math.exp(rng.gauss(3.5, 0.8)), 2)
             hour = int(min(23, max(0, rng.gauss(14, 4))))

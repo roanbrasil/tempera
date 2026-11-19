@@ -18,6 +18,7 @@ import pytest
 pytest.importorskip("sklearn")
 pytest.importorskip("lightgbm")
 pytest.importorskip("xgboost")
+pytest.importorskip("catboost")
 pytest.importorskip("onnxruntime")
 pytest.importorskip("pandas")
 
@@ -44,26 +45,48 @@ CLASSES = {
 }
 FAST_PARAMS: dict[str, dict[str, Any]] = {
     "random_forest": {"n_estimators": 60},
+    "extra_trees": {"n_estimators": 60},
     "lightgbm": {"num_boost_round": 300, "min_data_in_leaf": 10},
     "xgboost": {"num_boost_round": 300},
+    "catboost": {"num_boost_round": 300},
 }
-CASES = [
-    ("logistic_regression", "binary_classification"),
-    ("logistic_regression", "multiclass_classification"),
-    ("linear_regression", "regression"),
-    ("ridge", "regression"),
-    ("random_forest", "binary_classification"),
-    ("random_forest", "multiclass_classification"),
-    ("random_forest", "regression"),
-    ("lightgbm", "binary_classification"),
-    ("lightgbm", "multiclass_classification"),
-    ("lightgbm", "regression"),
-    ("xgboost", "binary_classification"),
-    ("xgboost", "multiclass_classification"),
-    ("xgboost", "regression"),
-]
+ALL_SUPERVISED = ("binary_classification", "multiclass_classification", "regression")
+CLASSIFICATION = ALL_SUPERVISED[:2]
+TASKS_BY_ALGORITHM: dict[str, tuple[str, ...]] = {
+    "logistic_regression": CLASSIFICATION,
+    "linear_regression": ("regression",),
+    "ridge": ("regression",),
+    "lasso": ("regression",),
+    "elastic_net": ("regression",),
+    "sgd": ALL_SUPERVISED,
+    "random_forest": ALL_SUPERVISED,
+    "extra_trees": ALL_SUPERVISED,
+    "hist_gradient_boosting": ALL_SUPERVISED,
+    "adaboost": ALL_SUPERVISED,
+    "knn": ALL_SUPERVISED,
+    "svm": ALL_SUPERVISED,
+    "naive_bayes": CLASSIFICATION,
+    "mlp": ALL_SUPERVISED,
+    "lightgbm": ALL_SUPERVISED,
+    "xgboost": ALL_SUPERVISED,
+    "catboost": ALL_SUPERVISED,
+}
+CASES = [(algorithm, task) for algorithm, tasks in TASKS_BY_ALGORITHM.items() for task in tasks]
 # ONNX export must succeed for these (others may legitimately fall back to a warning).
-ONNX_REQUIRED = {"logistic_regression", "linear_regression", "ridge", "random_forest", "lightgbm"}
+ONNX_REQUIRED = {
+    "logistic_regression",
+    "linear_regression",
+    "ridge",
+    "lasso",
+    "elastic_net",
+    "random_forest",
+    "extra_trees",
+    "lightgbm",
+}
+# Models without a meaningful per-feature importance must not emit any (no made-up numbers).
+NO_IMPORTANCE = {"hist_gradient_boosting", "knn", "svm", "naive_bayes", "mlp"}
+# Per-iteration `valid/<loss>` metrics with a step, plus one progress event per iteration.
+ITERATIVE = {"lightgbm", "xgboost", "catboost"}
 
 
 def make_dataset(task: str, n: int, seed: int) -> pa.Table:
@@ -127,11 +150,21 @@ def fit_manifest(tmp: Path, algorithm: str, task: str, **overrides: Any) -> dict
     return manifest
 
 
-def check_quality(task: str, valid: pa.Table, preds: pa.Table) -> None:
+# Default bars: R2 > 0.8, AUC > 0.85, accuracy > 0.6. Relaxed only where the model family justifies it.
+RELAXED_BARS: dict[tuple[str, str], dict[str, float]] = {
+    # AdaBoost.R2 averages 100 shallow (depth-3) trees with a weighted median: a coarse step function that
+    # reaches R2 ~0.77 on this smooth, 600-row additive target, where other ensembles reach ~0.9.
+    ("adaboost", "regression"): {"r2": 0.7},
+}
+
+
+def check_quality(algorithm: str, task: str, valid: pa.Table, preds: pa.Table) -> None:
+    bars = {"r2": 0.8, "auc": 0.85, "accuracy": 0.6} | RELAXED_BARS.get((algorithm, task), {})
     truth = valid.column("__target__").to_pylist()
     if task == "regression":
         r2 = r2_score(truth, preds.column("prediction").to_numpy())
-        assert r2 > 0.8, f"R2 {r2:.3f}"
+        print(f"QUALITY {algorithm} {task} r2={r2:.3f}")
+        assert r2 > bars["r2"], f"R2 {r2:.3f}"
         return
     classes = CLASSES[task]
     proba = np.column_stack([preds.column(f"proba__{c}").to_numpy() for c in classes])
@@ -140,8 +173,10 @@ def check_quality(task: str, valid: pa.Table, preds: pa.Table) -> None:
         auc = roc_auc_score([t == "yes" for t in truth], proba[:, 1])
     else:
         auc = roc_auc_score(truth, proba, multi_class="ovr", labels=classes)
-    assert auc > 0.85, f"AUC {auc:.3f}"
-    assert accuracy_score(truth, preds.column("prediction").to_pylist()) > 0.6
+    accuracy = accuracy_score(truth, preds.column("prediction").to_pylist())
+    print(f"QUALITY {algorithm} {task} auc={auc:.3f} acc={accuracy:.3f}")
+    assert auc > bars["auc"], f"AUC {auc:.3f}"
+    assert accuracy > bars["accuracy"], f"accuracy {accuracy:.3f}"
 
 
 @pytest.mark.parametrize(("algorithm", "task"), CASES)
@@ -151,11 +186,14 @@ def test_contract(tmp_path: Path, algorithm: str, task: str) -> None:
     assert proc.returncode == 0, proc.stderr
     assert events[-1] == {"t": "done", "summary": {}}
 
-    # Feature importance for every feature, without a step.
+    # Feature importance for every feature, without a step (or none at all when the model has none).
     importance = {e["name"]: e for e in events if e["t"] == "metric" and e["name"].startswith("importance/")}
-    assert set(importance) == {f"importance/{f['name']}" for f in FEATURES}
+    if algorithm in NO_IMPORTANCE:
+        assert not importance
+    else:
+        assert set(importance) == {f"importance/{f['name']}" for f in FEATURES}
     assert all("step" not in e for e in importance.values())
-    if algorithm in {"lightgbm", "xgboost"}:
+    if algorithm in ITERATIVE:
         losses = [e for e in events if e["t"] == "metric" and e["name"].startswith("valid/")]
         assert losses and all(isinstance(e.get("step"), int) for e in losses)
         assert sum(e["t"] == "progress" for e in events) == len({e["step"] for e in losses})
@@ -181,7 +219,7 @@ def test_contract(tmp_path: Path, algorithm: str, task: str) -> None:
     want_type = pa.float64() if task == "regression" else pa.string()
     assert preds.schema.field("prediction").type == want_type
     assert all(preds.schema.field(c).type == pa.float64() for c in expected[1:])
-    check_quality(task, valid, preds)
+    check_quality(algorithm, task, valid, preds)
 
     # `predict` from the saved model reproduces fit-time predictions.
     out = tmp_path / "again.parquet"
@@ -208,6 +246,17 @@ def test_contract(tmp_path: Path, algorithm: str, task: str) -> None:
     # ONNX reproduces the native predictions.
     if onnx_events:
         onnx_out = run_onnx(model_dir, valid)
+        if algorithm == "knn":
+            # Features are rounded to 2 decimals, so equidistant neighbors are common, and float32 distances
+            # in onnxruntime break those ties differently from float64 scikit-learn on a few rows.
+            native = (
+                preds.column("prediction").to_numpy()
+                if task == "regression"
+                else np.column_stack([preds.column(f"proba__{c}").to_numpy() for c in CLASSES[task]])
+            )
+            close = np.isclose(onnx_out, native, rtol=1e-5, atol=1e-5)
+            assert (close.all(axis=1) if close.ndim == 2 else close).mean() >= 0.98
+            return
         if task == "regression":
             native = preds.column("prediction").to_numpy()
             np.testing.assert_allclose(onnx_out, native, rtol=1e-5, atol=1e-5)
@@ -216,9 +265,11 @@ def test_contract(tmp_path: Path, algorithm: str, task: str) -> None:
             np.testing.assert_allclose(onnx_out, native, atol=1e-5)
 
 
-def test_xgboost_onnx_without_categorical_features(tmp_path: Path) -> None:
+@pytest.mark.parametrize("algorithm", ["xgboost", "catboost"])
+def test_onnx_without_categorical_features(tmp_path: Path, algorithm: str) -> None:
+    # Both converters reject categorical splits; numeric-only models must export and match.
     numeric_only = [f for f in FEATURES if f["kind"] != "categorical"]
-    manifest = fit_manifest(tmp_path, "xgboost", "binary_classification", features=numeric_only)
+    manifest = fit_manifest(tmp_path, algorithm, "binary_classification", features=numeric_only)
     proc, events = run_manifest("fit", manifest, tmp_path / "run.json")
     assert proc.returncode == 0, proc.stderr
     assert any(e["t"] == "artifact" and e.get("format") == "onnx" for e in events)
@@ -228,6 +279,17 @@ def test_xgboost_onnx_without_categorical_features(tmp_path: Path) -> None:
         [preds.column(f"proba__{c}").to_numpy() for c in CLASSES["binary_classification"]]
     )
     np.testing.assert_allclose(run_onnx(tmp_path / "run" / "model", valid), native, atol=1e-5)
+
+
+def test_svm_subsamples_large_training_sets(tmp_path: Path) -> None:
+    # `max_train_rows` lowers the 20,000-row cap so the test stays fast.
+    manifest = fit_manifest(
+        tmp_path, "svm", "binary_classification", params={"max_train_rows": 200}, export=["native"]
+    )
+    proc, events = run_manifest("fit", manifest, tmp_path / "run.json")
+    assert proc.returncode == 0, proc.stderr
+    warns = [e["msg"] for e in events if e["t"] == "log" and e["level"] == "warn"]
+    assert any("from 600 to 200 rows" in w for w in warns), warns
 
 
 def test_unseen_category_and_missing_values_at_predict(tmp_path: Path) -> None:

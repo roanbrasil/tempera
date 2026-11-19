@@ -45,3 +45,14 @@ class Algorithm(Protocol):
 
     @classmethod
     def load(cls, model_dir: Path) -> Self: ...
+
+
+@runtime_checkable
+class Evaluates(Protocol):
+    """Algorithms that score their own predictions (clustering, Contracts.md section 8).
+
+    `evaluate` returns metric name -> value (emitted as metric events without a step); metrics that are
+    undefined for the data (e.g. silhouette with fewer than 2 clusters) are left out.
+    """
+
+    def evaluate(self, data: pa.Table, predictions: pa.Table) -> dict[str, float]: ...

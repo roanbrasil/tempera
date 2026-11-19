@@ -157,14 +157,39 @@ def test_list_shows_every_algorithm() -> None:
     proc = run_cli("list")
     assert proc.returncode == 0
     assert proc.stdout.split() == [
+        "adaboost",
+        "catboost",
+        "dbscan",
         "dummy",
+        "elastic_net",
+        "extra_trees",
+        "hist_gradient_boosting",
+        "isolation_forest",
+        "kmeans",
+        "knn",
+        "lasso",
         "lightgbm",
         "linear_regression",
         "logistic_regression",
+        "mlp",
+        "naive_bayes",
+        "pca_kmeans",
         "random_forest",
         "ridge",
+        "sgd",
+        "svm",
         "xgboost",
     ]
+
+
+@pytest.mark.parametrize("task", ["clustering", "anomaly_detection"])
+def test_unsupervised_task_unsupported_by_dummy_exits_2(tmp_path: Path, task: str) -> None:
+    # Unsupervised manifests omit `classes`; the task is valid but `dummy` does not implement it.
+    manifest = _fit_manifest(tmp_path, task=task)
+    del manifest["classes"], manifest["positive_class"]
+    proc, events = run_manifest("fit", manifest, tmp_path / "run.json")
+    assert proc.returncode == 2, proc.stderr
+    assert "does not support task" in events[-1]["msg"]
 
 
 @pytest.mark.skipif(importlib.util.find_spec("sklearn") is not None, reason="tabular extra is installed")

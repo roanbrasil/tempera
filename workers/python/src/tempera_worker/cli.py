@@ -1,7 +1,8 @@
 """`python -m tempera_worker fit|predict --manifest PATH`: entry point the agent invokes.
 
-Contract: docs/wiki/Contracts.md, section 7. stdout carries only JSONL events (section 3); everything
-else (Python prints, native library output) is routed to stderr.
+Contract: docs/wiki/Contracts.md, sections 7 (supervised) and 8 (clustering, anomaly detection).
+stdout carries only JSONL events (section 3); everything else (Python prints, native library output)
+is routed to stderr.
 
 Exit codes: 0 success (`done` emitted) · 1 unexpected error · 2 bad manifest / unknown algorithm ·
 3 stopped by signal (checkpoint saved when supported).
@@ -21,6 +22,7 @@ from tempera_worker import algorithms
 from tempera_worker.context import RunContext
 from tempera_worker.events import EventSink
 from tempera_worker.manifest import (
+    SUPERVISED_TASKS,
     TARGET_COLUMN,
     Feature,
     FitManifest,
@@ -29,7 +31,7 @@ from tempera_worker.manifest import (
     load_fit,
     load_predict,
 )
-from tempera_worker.protocol import MODEL_DESCRIPTOR
+from tempera_worker.protocol import MODEL_DESCRIPTOR, Evaluates
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -64,7 +66,11 @@ def _event_stream() -> IO[str]:
 
 
 def read_table(path: Path, features: list[Feature], with_target: bool) -> pa.Table:
-    """Read only the feature columns (and `__target__`) of a model-ready Parquet file."""
+    """Read only the feature columns (and `__target__`) of a model-ready Parquet file.
+
+    Unsupervised tasks call this with `with_target=False`: `__target__` may be absent (clustering) and,
+    when present (labelled anomaly detection), it is never even loaded, so `fit` cannot train on it.
+    """
     import pyarrow.parquet as pq
 
     try:
@@ -78,7 +84,10 @@ def read_table(path: Path, features: list[Feature], with_target: bool) -> pa.Tab
     return pq.read_table(path, columns=columns)
 
 
-def _write_predictions(algo: Algorithm, data: pa.Table, output: Path, events: EventSink) -> None:
+def _write_predictions(
+    algo: Algorithm, data: pa.Table, output: Path, events: EventSink, evaluate: bool = False
+) -> None:
+    """Predict, write the Parquet file, and (for clustering, `evaluate=True`) emit `eval/*` metrics."""
     import pyarrow.parquet as pq
 
     preds = algo.predict(data)
@@ -87,6 +96,9 @@ def _write_predictions(algo: Algorithm, data: pa.Table, output: Path, events: Ev
     output.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(preds, output)
     events.artifact("predictions", str(output))
+    if evaluate and isinstance(algo, Evaluates):
+        for name, value in algo.evaluate(data, preds).items():
+            events.metric(name, value)
 
 
 def _algorithm_class(name: str, task: str) -> type[Algorithm]:
@@ -113,8 +125,9 @@ def run_fit(m: FitManifest, events: EventSink) -> int:
     )
     ctx.install_signal_handlers()
 
-    train = read_table(m.train, m.features, with_target=True)
-    valid = read_table(m.valid, m.features, with_target=True) if m.valid else None
+    supervised = m.task in SUPERVISED_TASKS
+    train = read_table(m.train, m.features, with_target=supervised)
+    valid = read_table(m.valid, m.features, with_target=supervised) if m.valid else None
     events.log(
         f"fit {m.algorithm} ({m.task}): {train.num_rows} train rows"
         + (f", {valid.num_rows} valid rows" if valid is not None else "")
@@ -142,8 +155,10 @@ def run_fit(m: FitManifest, events: EventSink) -> int:
     for path in exported:
         events.artifact("model", str(path), "onnx")
 
-    for entry in m.predict:
-        _write_predictions(algo, read_table(entry.input, m.features, with_target=False), entry.output, events)
+    for i, entry in enumerate(m.predict):
+        data = read_table(entry.input, m.features, with_target=False)
+        # Section 8: fit-time cluster metrics refer to the first `predict` entry (the validation set).
+        _write_predictions(algo, data, entry.output, events, evaluate=i == 0)
     events.done({})
     return EXIT_OK
 
@@ -160,7 +175,8 @@ def run_predict(m: PredictManifest, events: EventSink) -> int:
         )
     algo = _algorithm_class(m.algorithm, m.task).load(m.model_dir)
     features = [Feature(f["name"], f["kind"]) for f in descriptor["features"]]
-    _write_predictions(algo, read_table(m.input, features, with_target=False), m.output, events)
+    data = read_table(m.input, features, with_target=False)
+    _write_predictions(algo, data, m.output, events, evaluate=True)
     events.done({})
     return EXIT_OK
 

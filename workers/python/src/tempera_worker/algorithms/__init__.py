@@ -17,13 +17,31 @@ REGISTRY: dict[str, type[Algorithm]] = {
 
 _SKLEARN = "tempera_worker.tabular.sklearn_models"
 _GBM = "tempera_worker.tabular.gbm"
+_UNSUPERVISED = "tempera_worker.tabular.unsupervised"
 LAZY: dict[str, tuple[str, str, str]] = {
+    # supervised (Contracts.md, section 7)
     "logistic_regression": (_SKLEARN, "LogisticRegressionAlgorithm", "tabular"),
     "linear_regression": (_SKLEARN, "LinearRegressionAlgorithm", "tabular"),
     "ridge": (_SKLEARN, "RidgeAlgorithm", "tabular"),
+    "lasso": (_SKLEARN, "LassoAlgorithm", "tabular"),
+    "elastic_net": (_SKLEARN, "ElasticNetAlgorithm", "tabular"),
+    "sgd": (_SKLEARN, "SgdAlgorithm", "tabular"),
     "random_forest": (_SKLEARN, "RandomForestAlgorithm", "tabular"),
+    "extra_trees": (_SKLEARN, "ExtraTreesAlgorithm", "tabular"),
+    "hist_gradient_boosting": (_SKLEARN, "HistGradientBoostingAlgorithm", "tabular"),
+    "adaboost": (_SKLEARN, "AdaBoostAlgorithm", "tabular"),
+    "knn": (_SKLEARN, "KnnAlgorithm", "tabular"),
+    "svm": (_SKLEARN, "SvmAlgorithm", "tabular"),
+    "naive_bayes": (_SKLEARN, "NaiveBayesAlgorithm", "tabular"),
+    "mlp": (_SKLEARN, "MlpAlgorithm", "tabular"),
     "lightgbm": (_GBM, "LightGbmAlgorithm", "tabular"),
     "xgboost": (_GBM, "XGBoostAlgorithm", "tabular"),
+    "catboost": (_GBM, "CatBoostAlgorithm", "tabular"),
+    # unsupervised (Contracts.md, section 8)
+    "kmeans": (_UNSUPERVISED, "KMeansAlgorithm", "tabular"),
+    "dbscan": (_UNSUPERVISED, "DbscanAlgorithm", "tabular"),
+    "pca_kmeans": (_UNSUPERVISED, "PcaKMeansAlgorithm", "tabular"),
+    "isolation_forest": (_UNSUPERVISED, "IsolationForestAlgorithm", "tabular"),
 }
 
 

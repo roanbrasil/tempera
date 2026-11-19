@@ -17,6 +17,7 @@ tabular = [
     "scikit-learn>=1.5",
     "lightgbm>=4.5",
     "xgboost>=2.1",
+    "catboost>=1.2",
     "skl2onnx>=1.17",
     "onnxmltools>=1.12",
     "onnxruntime>=1.20",
