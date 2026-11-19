@@ -4,6 +4,7 @@ mod builtin;
 mod candidates;
 mod draft;
 mod events;
+mod hpo;
 mod http;
 mod orchestrator;
 mod ui;

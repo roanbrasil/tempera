@@ -219,6 +219,43 @@ pub fn make_split(ds: &Dataset, spec: &JobSpec, task: TaskType, plan: &FeaturePl
     Ok(split)
 }
 
+/// A stratified sample of the training partition (used as the budget of
+/// hyperparameter-search rungs). Every class keeps at least 2 rows. Cached.
+pub fn train_fraction(split: &Split, fraction: f64, seed: u64) -> Result<PathBuf> {
+    if fraction >= 1.0 {
+        return Ok(split.path(Partition::Train));
+    }
+    let out = split.dir.join(format!("train_f{:.4}_s{seed}.parquet", fraction));
+    if out.is_file() {
+        return Ok(out);
+    }
+    let df = scan_parquet(&split.path(Partition::Train))?.collect()?;
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    match df.column(TARGET).ok().filter(|_| !split.classes.is_empty()) {
+        Some(t) => {
+            for (i, l) in t.cast(&DataType::String)?.str()?.iter().enumerate() {
+                groups.entry(l.unwrap_or("").to_owned()).or_default().push(i);
+            }
+        }
+        None => {
+            groups.insert(String::new(), (0..df.height()).collect());
+        }
+    }
+    let mut keep = Vec::new();
+    for (label, mut idx) in groups {
+        shuffle(&mut idx, seed ^ mix(1, label.as_bytes()));
+        let n = ((idx.len() as f64) * fraction).ceil() as usize;
+        keep.extend_from_slice(&idx[..n.max(2.min(idx.len())).min(idx.len())]);
+    }
+    keep.sort_unstable();
+    let take = IdxCa::from_vec("idx".into(), keep.into_iter().map(|i| i as IdxSize).collect());
+    let mut sample = df.take(&take)?;
+    let tmp = out.with_extension("parquet.tmp");
+    ParquetWriter::new(std::fs::File::create(&tmp)?).finish(&mut sample)?;
+    std::fs::rename(tmp, &out)?;
+    Ok(out)
+}
+
 /// Selects, casts and renames columns into the model-ready layout.
 fn model_ready(
     lf: LazyFrame,
@@ -681,6 +718,31 @@ mod tests {
         let s = make_split(&ds, &spec(""), TaskType::AnomalyDetection, &plan()).unwrap();
         assert_eq!(s.strategy, SplitStrategy::Stratified);
         assert_eq!(s.positive_class.as_deref(), Some("yes"));
+    }
+
+    #[test]
+    fn train_fraction_is_stratified_and_cached() {
+        let (_t, ds) = dataset(900);
+        let s = make_split(&ds, &spec(""), TaskType::BinaryClassification, &plan()).unwrap();
+        let p = train_fraction(&s, 1.0 / 9.0, 1).unwrap();
+        let df = read(&p);
+        let n_train = s.rows["train"] as f64;
+        assert!(
+            (df.height() as f64 - n_train / 9.0).abs() < 4.0,
+            "{}",
+            df.height()
+        );
+        let yes = df
+            .column(TARGET)
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .filter(|v| *v == Some("yes"))
+            .count();
+        assert!(yes >= 2);
+        assert_eq!(train_fraction(&s, 1.0 / 9.0, 1).unwrap(), p);
+        assert_eq!(train_fraction(&s, 1.0, 1).unwrap(), s.path(Partition::Train));
     }
 
     #[test]

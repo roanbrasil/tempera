@@ -22,6 +22,7 @@ use tempera_track::{MetricPoint, Tracker};
 use crate::builtin;
 use crate::candidates::{BackendKind, Candidate, candidates};
 use crate::events::{self, Eta, JobEvent};
+use crate::hpo;
 use crate::ui;
 use crate::workspace::{Workspace, python_available, worker_dir};
 
@@ -351,13 +352,33 @@ async fn train_and_report(
             .collect();
         done.sort_by(f64::total_cmp);
         let rest_s = done.get(done.len() / 2).map(|m| m * (cands.len() - i - 1) as f64);
+        let over_budget = budget_left(spec, started).is_some_and(|left| left <= 0.0);
+        let opts = RunOpts {
+            rest_s,
+            ..RunOpts::default()
+        };
         let summary = if events::is_cancelled(job_id) {
             skipped(tracker, job_id, &run_id, cand, "cancelled").await?
+        } else if over_budget {
+            skipped(tracker, job_id, &run_id, cand, "time budget exhausted").await?
         } else if let (BackendKind::Python, Err(why)) = (cand.backend, &python) {
             skipped(tracker, job_id, &run_id, cand, why).await?
+        } else if let (Some(h), Some(space)) = (
+            &spec.strategy.hpo,
+            hpo::space(&cand.algorithm, cand.backend.as_str()),
+        ) {
+            let search = Search {
+                max_trials: h.max_trials as usize,
+                space,
+                started,
+            };
+            run_search(
+                tracker, &hub, job_id, &run_id, job_dir, cand, spec, split, task, metric, &search,
+            )
+            .await?
         } else {
             run_candidate(
-                tracker, &hub, job_id, &run_id, job_dir, cand, spec, split, task, metric, rest_s,
+                tracker, &hub, job_id, &run_id, job_dir, cand, spec, split, task, metric, &opts,
             )
             .await?
         };
@@ -482,6 +503,151 @@ async fn train_and_report(
     Ok(report)
 }
 
+/// Seconds left of `budget.max_time` (None when there is no time budget).
+fn budget_left(spec: &JobSpec, started: Instant) -> Option<f64> {
+    spec.budget
+        .max_time
+        .map(|t| t.as_duration().as_secs_f64() - started.elapsed().as_secs_f64())
+}
+
+struct Search {
+    max_trials: usize,
+    space: Vec<(&'static str, hpo::Dist)>,
+    started: Instant,
+}
+
+fn best_first(
+    hib: bool,
+) -> impl Fn(&(f64, usize, RunSummary), &(f64, usize, RunSummary)) -> std::cmp::Ordering {
+    move |a, b| {
+        if hib {
+            b.0.total_cmp(&a.0)
+        } else {
+            a.0.total_cmp(&b.0)
+        }
+    }
+}
+
+/// Successive halving over training-set fractions (see `hpo`). Returns the best
+/// trial of the largest rung reached; every trial is a tracked run.
+#[allow(clippy::too_many_arguments)]
+async fn run_search(
+    tracker: &Tracker,
+    hub: &Hub,
+    job_id: &str,
+    run_id: &str,
+    job_dir: &Path,
+    cand: &Candidate,
+    spec: &JobSpec,
+    split: &Split,
+    task: TaskType,
+    metric: tempera_core::spec::Metric,
+    search: &Search,
+) -> anyhow::Result<RunSummary> {
+    let hib = higher_is_better(metric);
+    let salt = cand
+        .algorithm
+        .bytes()
+        .fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)));
+    let mut sampler = hpo::Sampler::new(spec.split.seed ^ salt);
+    // Trial 1 is always the backend defaults, so a search never does worse than not searching.
+    let mut alive: Vec<serde_json::Map<String, serde_json::Value>> = std::iter::once(serde_json::Map::new())
+        .chain((1..search.max_trials.max(1)).map(|_| sampler.sample(&search.space)))
+        .collect();
+    let mut trial = 0usize;
+    let mut best: Option<RunSummary> = None;
+    'rungs: for (r, frac) in hpo::RUNGS.iter().enumerate() {
+        let train = {
+            let (split, f, seed) = (split.clone(), *frac, spec.split.seed);
+            tokio::task::spawn_blocking(move || tempera_data::split::train_fraction(&split, f, seed))
+                .await??
+        };
+        let mut scored: Vec<(f64, usize, RunSummary)> = Vec::new();
+        for (i, params) in alive.iter().enumerate() {
+            let stop = if events::is_cancelled(job_id) {
+                Some("cancelled")
+            } else if budget_left(spec, search.started).is_some_and(|l| l <= 0.0) {
+                Some("time budget exhausted")
+            } else {
+                None
+            };
+            if let Some(why) = stop {
+                ui::detail(&format!(
+                    "{}: search stopped at rung {} ({why})",
+                    cand.algorithm,
+                    r + 1
+                ));
+                scored.sort_by(best_first(hib));
+                if let Some(top) = scored.into_iter().next() {
+                    best = Some(top.2);
+                }
+                break 'rungs;
+            }
+            trial += 1;
+            let trial_id = format!("{run_id}-t{trial}");
+            events::emit(
+                job_id,
+                JobEvent::RunStarted {
+                    run_id: trial_id.clone(),
+                    algorithm: format!("{} · trial {trial} · {:.0}% data", cand.algorithm, frac * 100.0),
+                    backend: cand.backend.as_str().to_owned(),
+                    index: i + 1,
+                    total: alive.len(),
+                },
+            );
+            let opts = RunOpts {
+                params: params.clone(),
+                train: Some(train.clone()),
+                rest_s: None,
+            };
+            let s = run_candidate(
+                tracker, hub, job_id, &trial_id, job_dir, cand, spec, split, task, metric, &opts,
+            )
+            .await?;
+            events::emit(
+                job_id,
+                JobEvent::RunFinished {
+                    run_id: trial_id,
+                    status: s.status.clone(),
+                    valid_score: s.valid_score.filter(|v| v.is_finite()),
+                    valid_metrics: serde_json::to_value(&s.valid_metrics)?,
+                    duration_s: s.duration_s,
+                    error: s.error.clone(),
+                },
+            );
+            if let Some(v) = s.valid_score.filter(|v| v.is_finite()) {
+                scored.push((v, i, s));
+            }
+        }
+        scored.sort_by(best_first(hib));
+        let last = r + 1 == hpo::RUNGS.len();
+        if !last && !scored.is_empty() {
+            let keep = hpo::survivors(alive.len());
+            let mut next: Vec<_> = scored
+                .iter()
+                .take(keep)
+                .map(|(_, i, _)| alive[*i].clone())
+                .collect();
+            // Small rungs are noisy: the defaults always reach the full-data rung.
+            if !next.iter().any(serde_json::Map::is_empty) && alive.iter().any(serde_json::Map::is_empty) {
+                next.push(serde_json::Map::new());
+            }
+            alive = next;
+        }
+        if let Some(top) = scored.into_iter().next() {
+            best = Some(top.2);
+        } else {
+            break;
+        }
+        if last {
+            break;
+        }
+    }
+    let mut best = best.ok_or_else(|| anyhow!("every {} trial failed", cand.algorithm))?;
+    best.valid_metrics.insert("hpo_trials".into(), trial as f64);
+    Ok(best)
+}
+
 async fn skipped(
     tracker: &Tracker,
     job_id: &str,
@@ -535,6 +701,14 @@ fn summary(
     }
 }
 
+/// Per-run overrides: hyperparameters (HPO trials) and a smaller train set (HPO rungs).
+#[derive(Debug, Default, Clone)]
+struct RunOpts {
+    params: serde_json::Map<String, serde_json::Value>,
+    train: Option<PathBuf>,
+    rest_s: Option<f64>,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_candidate(
     tracker: &Tracker,
@@ -547,7 +721,7 @@ async fn run_candidate(
     split: &Split,
     task: TaskType,
     metric: tempera_core::spec::Metric,
-    rest_s: Option<f64>,
+    opts: &RunOpts,
 ) -> anyhow::Result<RunSummary> {
     let t = Instant::now();
     let work = job_dir.join("runs").join(run_id);
@@ -560,7 +734,7 @@ async fn run_candidate(
             &cand.algorithm,
             cand.backend.as_str(),
             cand.is_baseline,
-            &serde_json::json!({}),
+            &serde_json::Value::Object(opts.params.clone()),
         )
         .await?;
 
@@ -581,7 +755,11 @@ async fn run_candidate(
             .map(|()| (None, BTreeMap::new()))
         }
         BackendKind::Native | BackendKind::Python => {
-            let manifest = fit_manifest(cand, spec, split, task, &work, &valid_pred);
+            let mut manifest = fit_manifest(cand, spec, split, task, &work, &valid_pred);
+            manifest.params = opts.params.clone();
+            if let Some(train) = &opts.train {
+                manifest.train = abs(train);
+            }
             dispatch(
                 tracker,
                 hub,
@@ -591,7 +769,7 @@ async fn run_candidate(
                 JobCommand::Fit,
                 serde_json::to_string(&manifest)?,
                 true,
-                rest_s,
+                opts.rest_s,
             )
             .await
             .map(|evals| (Some(work.join("model").display().to_string()), evals))
