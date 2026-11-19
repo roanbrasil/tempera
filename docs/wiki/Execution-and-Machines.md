@@ -121,27 +121,70 @@ The library API is `tempera_exec::SshMachine`:
 
 ## Cloud (GPU via API key)
 
+> **Status (M6, preview).** The RunPod and Vast.ai clients were written from the providers' public
+> API documentation and are covered by unit tests on recorded JSON shapes, but they **have not yet
+> been exercised against a live account**. The full flow (plan → rent → SSH → train → terminate →
+> report) is tested end to end with the `mock` provider, which boots a real sshd container.
+
 Providers in priority order (criteria: price, good API, spot):
 
-| Provider | Why | Phase |
+| Provider | Why | Status |
 |---|---|---|
-| **RunPod** | Simple API, cheap GPUs, spot ("community") | M6 |
-| **Vast.ai** | Cheapest marketplace; requires a reliability filter | M6 |
+| **RunPod** | Simple API, cheap GPUs, spot ("community") | client implemented, unverified live |
+| **Vast.ai** | Cheapest marketplace; requires a reliability filter | client implemented, unverified live |
+| `mock` | CI and demos; optional Docker sshd instance, simulated preemption | tested end to end |
 | Lambda | Good on-demand pricing | post-M6 |
 | AWS / GCP / Azure (spot) | For companies that already have accounts and credits | post-M6 |
 | Any Kubernetes | Self-hosted clusters | future |
 
-`Provider` trait:
+### Using it
+
+```bash
+export RUNPOD_API_KEY=...        # or VAST_API_KEY; read from the environment only, never printed
+tempera cloud offers --provider runpod --gpu 4090
+tempera cloud estimate tempera.yaml   # compares machines, prints the savings line, rents nothing
+```
+
+```yaml
+compute:
+  allow: [runpod, local]   # `local` lets this machine compete (it costs $0)
+  objective: cheapest      # cheapest | fastest | cheapest_under (with deadline)
+  spot: true
+budget:
+  max_cost: { amount: 2, currency: USD }   # cloud caps are in USD
+```
+
+`tempera run` then:
+
+1. **Plans:** lists offers (saved as a pricing snapshot), estimates ETA and cost on each machine,
+   ranks them by `compute.objective` and prints the comparison with a one-line rationale. If this
+   machine wins, nothing is rented. If the best estimate exceeds `budget.max_cost`, the job is
+   refused before anything is rented.
+2. **Rents:** writes a lease, launches the offer with a throwaway SSH key (named `tempera-<job>`),
+   waits until SSH answers.
+3. **Runs over SSH:** exactly the LAN-machine path (agent install, reverse tunnel, content-addressed
+   data cache, results pulled back).
+4. **Watches:** every 15 s the spend is metered (alert at 80% of the budget, cancel at 100%); every
+   minute the lease heartbeat is refreshed and a vanished (preempted) instance cancels the job.
+5. **Always terminates:** on success, on error, on cancel and on Ctrl-C. A killed process cannot
+   clean up, so the **reaper** (`tempera cloud reap`, and every 4 minutes under `tempera up`)
+   terminates any `tempera-*` instance without a fresh lease (TTL 10 min).
+
+`Provider` trait (synchronous; called from `spawn_blocking`):
 
 ```rust
-#[async_trait]
-pub trait Provider {
-    async fn list_offers(&self, req: &ResourceRequest) -> Result<Vec<Offer>>; // price, GPU, VRAM, spot?, region
-    async fn launch(&self, offer: &Offer, boot: &BootSpec) -> Result<InstanceId>;
-    async fn status(&self, id: &InstanceId) -> Result<InstanceStatus>;
-    async fn terminate(&self, id: &InstanceId) -> Result<()>;
+pub trait Provider: Send + Sync + Debug {
+    fn name(&self) -> &str;
+    fn list_offers(&self, req: &ResourceRequest) -> Result<Vec<Offer>>; // price, GPU, VRAM, spot?, region
+    fn launch(&self, offer: &Offer, boot: &BootSpec) -> Result<String>;
+    fn status(&self, id: &str) -> Result<Instance>;
+    fn instances(&self) -> Result<Vec<Instance>>;                       // for the reaper
+    fn terminate(&self, id: &str) -> Result<()>;                         // idempotent
 }
 ```
+
+Not done yet: resuming on a new instance after preemption (#56, today the job is cancelled
+cleanly), billing reconciliation with the provider, idle-instance shutdown for reused instances.
 
 ## Checkpointing and resumption
 

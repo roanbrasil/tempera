@@ -78,12 +78,12 @@ gantt
 
 ## M6: Cheap cloud
 **Delivers:** "run on the cheapest option that finishes within 2 h" with a rented GPU, with no surprises.
-- RunPod and Vast.ai providers
-- Synced price catalog
-- Cost estimation and machine recommendation
-- Spot + automatic resumption after preemption
-- Budget cap, auto-shutdown, orphan reaper, cost reconciliation
-- "Savings vs. naive run" report
+- ✅ RunPod and Vast.ai providers (implemented; live-account validation pending)
+- ✅ Synced price catalog (timestamped snapshots)
+- ✅ Cost estimation and machine recommendation (tabular prior; accuracy not yet measured)
+- ⏳ Spot + automatic resumption after preemption (preemption is detected and the job cancelled cleanly; resume pending)
+- ✅ Budget cap and alert, orphan reaper · ⏳ idle auto-shutdown, cost reconciliation
+- ✅ "Savings vs. naive run" in CLI, report and UI
 
 ## M7: Serving + beta
 **Delivers:** a product that third parties can install.

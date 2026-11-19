@@ -1,5 +1,9 @@
 # Cost and Estimation
 
+> **Implemented (M6, preview):** pricing snapshots, the tabular ETA/cost prior, machine ranking
+> with a rationale, budget refusal and meter, and the savings line live in `crates/tempera-cloud`
+> (`catalog`, `estimate`, `guard`). Deep-learning memory/FLOPs estimation (§1, §2) arrives with M5.
+
 Têmpera treats **cost** and **time** as first-class metrics, and estimates both **before** spending anything.
 
 ## 1. Memory estimation (does it fit or not?)
@@ -45,9 +49,18 @@ ETA error becomes a product metric (target: < 15% after warm-up).
 cost = hourly_price × (ETA + boot + margin) + storage + egress
 ```
 
-- **Price catalog:** periodically synced from provider APIs (RunPod, Vast...) and stored with a date, because prices change.
+- **Price catalog:** synced from provider APIs (RunPod, Vast...) and stored with a date, because prices change: `<TEMPERA_HOME>/pricing/<provider>-<unix time>.json`, one file per sync (that is the history). `tempera cloud sync` refreshes; every cloud `tempera run` also saves the prices it used; `tempera cloud prices` shows the latest prices and their age (stale after 6 h).
 - **Your own machines:** zero cost by default, with the option to enter the energy cost (W × US$/kWh) for those who want to be exact.
 - **Throughput normalization:** "US$ per job" matters more than "US$ per hour". A GPU that is 2x more expensive and 3x faster comes out cheaper overall.
+
+### The tabular prior (implemented)
+
+`work = Σ_algorithms seconds_per_Mcell(algorithm) × rows × columns / 10⁶ × (1 + 0.36 × hpo_trials)`,
+plus a per-fit overhead (≈0.2 s native, ≈4 s Python) and a few passes for profiling/audit. On a
+machine with `n` cores: `ETA = boot + overhead + work / amdahl(n, p = 0.85)`, with boot ≈ 180 s for
+a cloud instance and ≈ 15 s for an SSH machine. Cloud cost = `price × ETA` (billing starts at
+launch). The per-algorithm constants are priors, not measurements; calibrating them from finished
+runs is the next step toward the "< 20% cost error" target, which is **not yet measured**.
 
 ## 4. Machine recommendation
 
@@ -86,4 +99,7 @@ Estimated ETA:  38 min     Actual:      41 min     (+8%)
 Savings vs. naive run (on-demand A100, no early stopping): US$ 2.08 (85%)
 ```
 
-The **savings** line is the product's selling point.
+The **savings** line is the product's selling point. Today it compares the actual cost with the
+largest on-demand GPU among the offers, running the same work (×1/0.36 when a successive-halving
+search replaced an exhaustive one). It is printed by `tempera run` and `tempera cloud estimate`,
+stored in `report.json` (`cost.savings`) and shown in the HTML report and the live job page.

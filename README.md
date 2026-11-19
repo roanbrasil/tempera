@@ -26,8 +26,10 @@ Têmpera is an ML model training platform that takes you from a raw data file to
 
 > Status: **M1 done; M2–M4 mostly done.** Web UI with live training, 22 algorithms + 2 baselines (tabular
 > supervised, clustering, anomaly detection), budget-aware hyperparameter search, a 13-check data audit
-> plus a local SLM advisor, and jobs on your own machines over SSH. Cloud GPUs (M6) and deep learning
-> (M5) are next. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
+> plus a local SLM advisor, and jobs on your own machines over SSH. **Cloud GPUs (M6) in preview:**
+> RunPod and Vast.ai clients, pricing snapshots, cost estimates before renting, budget caps and an
+> orphan reaper; tested end to end with a mock provider, not yet against a live account. Deep
+> learning (M5) is next. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
 
 ## Quick start
 
@@ -65,6 +67,17 @@ tempera machines check gpu-box                                # installs the age
 
 Then add `compute: { allow: [gpu-box] }` to the spec. Data goes to the machine's cache by content hash
 (sent once), results come back automatically.
+
+### Cloud GPUs (preview)
+
+```bash
+export RUNPOD_API_KEY=...                 # or VAST_API_KEY
+tempera cloud estimate tempera.yaml       # compare machines and costs, rent nothing
+```
+
+Then `compute: { allow: [runpod, local] }` and a `budget.max_cost` in USD. Têmpera rents the
+cheapest machine that fits, runs the job over SSH and always terminates it. See
+[Execution and Machines](docs/wiki/Execution-and-Machines.md#cloud-gpu-via-api-key).
 
 ### CLI
 
