@@ -112,7 +112,7 @@ pub async fn label_issues(
             examples.join("; ")
         ),
         suggestion: format!(
-            "Review the suspects in {} before trusting small score differences. Rows are never removed automatically.",
+            "Review the suspects in {}. A high rate on an inherently uncertain target (churn, fraud) mostly means ambiguous rows, not typos; a few confident flips usually are data errors. Rows are never removed automatically.",
             out.display()
         ),
         resolution: Resolution::Auto {

@@ -1,6 +1,7 @@
-"""`python -m tempera_worker fit|predict --manifest PATH`: entry point the agent invokes.
+"""`python -m tempera_worker fit|predict|quality|fairness --manifest PATH`: entry point the agent invokes.
 
-Contract: docs/wiki/Contracts.md, sections 7 (supervised) and 8 (clustering, anomaly detection).
+Contract: docs/wiki/Contracts.md, sections 7 (supervised) and 8 (clustering, anomaly detection);
+`quality` (label issues, Data-Audit A7) and `fairness` (Data-Audit A8) need the `quality` extra.
 stdout carries only JSONL events (section 3); everything else (Python prints, native library output)
 is routed to stderr.
 
@@ -24,12 +25,16 @@ from tempera_worker.events import EventSink
 from tempera_worker.manifest import (
     SUPERVISED_TASKS,
     TARGET_COLUMN,
+    FairnessManifest,
     Feature,
     FitManifest,
     ManifestError,
     PredictManifest,
+    QualityManifest,
+    load_fairness,
     load_fit,
     load_predict,
+    load_quality,
 )
 from tempera_worker.protocol import MODEL_DESCRIPTOR, Evaluates
 
@@ -48,6 +53,10 @@ def _parser() -> argparse.ArgumentParser:
     fit.add_argument("--manifest", type=Path, required=True)
     predict = sub.add_parser("predict", help="load a saved model and predict one input")
     predict.add_argument("--manifest", type=Path, required=True)
+    quality = sub.add_parser("quality", help="find suspected label errors (Cleanlab confident learning)")
+    quality.add_argument("--manifest", type=Path, required=True)
+    fairness = sub.add_parser("fairness", help="per-group fairness metrics of test predictions (Fairlearn)")
+    fairness.add_argument("--manifest", type=Path, required=True)
     sub.add_parser("list", help="list available algorithms")
     return p
 
@@ -181,6 +190,30 @@ def run_predict(m: PredictManifest, events: EventSink) -> int:
     return EXIT_OK
 
 
+QUALITY_HINT = (
+    "install the `quality` extra: uv sync --extra quality (or pip install 'tempera-worker[quality]')"
+)
+
+
+def run_quality(m: QualityManifest, events: EventSink) -> int:
+    try:
+        from tempera_worker.quality import label_issues
+    except ImportError as e:
+        events.error(f"`quality` needs Cleanlab and scikit-learn ({e}); {QUALITY_HINT}")
+        return EXIT_ERROR
+    data = read_table(m.data, m.features, with_target=True)
+    return label_issues.run(m, data, events)
+
+
+def run_fairness(m: FairnessManifest, events: EventSink) -> int:
+    try:
+        from tempera_worker.quality import fairness
+    except ImportError as e:
+        events.error(f"`fairness` needs Fairlearn ({e}); {QUALITY_HINT}")
+        return EXIT_ERROR
+    return fairness.run(m, events)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "list":
@@ -192,6 +225,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "fit":
             return run_fit(load_fit(args.manifest), events)
+        if args.command == "quality":
+            return run_quality(load_quality(args.manifest), events)
+        if args.command == "fairness":
+            return run_fairness(load_fairness(args.manifest), events)
         return run_predict(load_predict(args.manifest), events)
     except ManifestError as e:
         events.error(str(e))

@@ -10,6 +10,9 @@ uv sync --extra tabular      # + scikit-learn, LightGBM, XGBoost, CatBoost
 uv run tempera-worker list
 uv run tempera-worker fit --manifest run.json       # train, save <work_dir>/model/, predict
 uv run tempera-worker predict --manifest pred.json  # load a saved model, predict
+uv sync --extra tabular --extra quality              # + Cleanlab, Fairlearn
+uv run tempera-worker quality --manifest m.json     # suspected label errors (Data-Audit A7)
+uv run tempera-worker fairness --manifest m.json    # per-group metrics of test predictions (A8)
 uv run pytest                # tabular tests are skipped unless the extra is installed
 ```
 

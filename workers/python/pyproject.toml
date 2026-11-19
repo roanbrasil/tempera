@@ -60,4 +60,7 @@ reportMissingImports = "warning"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["tabular: needs the `tabular` extra (skipped when it is not installed)"]
+markers = [
+    "tabular: needs the `tabular` extra (skipped when it is not installed)",
+    "quality: needs the `quality` extra (skipped when it is not installed)",
+]

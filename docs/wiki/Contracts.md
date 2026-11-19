@@ -328,3 +328,24 @@ serde shapes of the Rust types (`tempera-data`, `tempera-audit`, `tempera-track`
 
 `eta_s` is the remaining time of the current run (warm-up + EMA of the step time); `job_eta_s` adds an
 estimate for the runs not started yet (median duration of finished runs).
+
+## 10. Data-quality commands (A7, A8)
+
+Run on the Python worker (`quality` extra: cleanlab, fairlearn) through the agent with
+`COMMAND_QUALITY` / `COMMAND_FAIRNESS`. Same exit codes as §7; both announce their JSON output with an
+`artifact` event of kind `report`. Results become audit findings; they never block or fail a job.
+
+**`quality`** (label issues, classification only):
+`{"task","classes","features","data","output","folds":5,"seed","max_rows":50000,"top_n":50}` →
+`{"rows_checked","rows_total","subsampled","issues_found","estimated_noise_rate","per_class":{label:{"issues","rows"}},"top":[{"row","given","suggested","quality"}]}`.
+`row` is the index in the input Parquet; rows are never removed. `done` summary: `issues_found`,
+`estimated_noise_rate`.
+
+**`fairness`** (winner's test predictions):
+`{"task","classes","positive_class","truth","predictions","sensitive":{attr: parquet},"output"}` →
+`{"task","rows","small_group_threshold":30,"attributes":{attr:{"groups":[{"group","count","metrics","small"}],"summary":{...}}}}`.
+Binary metrics: `selection_rate`, `accuracy`, `tpr`, `fpr`; summary: demographic parity and equalized
+odds (difference and ratio), equal opportunity and accuracy differences. Multiclass: `accuracy`.
+Regression: `mae`, `rmse`, `mean_prediction`, `mean_truth`. Null group values form `"(missing)"`; groups
+under 30 rows are flagged `small`. Model-ready splits carry sensitive attributes as `__sens__<name>`
+(never features).

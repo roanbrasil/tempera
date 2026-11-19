@@ -71,7 +71,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: workers/python/uv.lock
-      - run: uv sync --locked --extra tabular
+      - run: uv sync --locked --extra tabular --extra quality
       - run: uv run pyright
       - run: uv run pytest -q
 

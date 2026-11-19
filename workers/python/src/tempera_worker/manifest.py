@@ -217,3 +217,96 @@ def load_predict(path: Path) -> PredictManifest:
         input=_path(raw, "input", must_exist=True),
         output=_path(raw, "output"),
     )
+
+
+# ---- data-quality manifests (Data-Audit A7 label issues, A8 fairness) ---------------------------------
+
+
+@dataclass(frozen=True)
+class QualityManifest:
+    """`quality` command: label-issue detection (confident learning) on a model-ready Parquet file."""
+
+    task: Task
+    classes: list[str]
+    features: list[Feature]
+    data: Path
+    output: Path
+    folds: int = 5
+    seed: int = 0
+    max_rows: int = 50_000
+    top_n: int = 50
+
+
+@dataclass(frozen=True)
+class FairnessManifest:
+    """`fairness` command: per-group metrics of a model's test predictions."""
+
+    task: Task
+    classes: list[str]
+    positive_class: str | None
+    truth: Path
+    predictions: Path
+    sensitive: dict[str, Path]
+    output: Path
+
+
+def _int(raw: dict[str, Any], key: str, default: int, minimum: int) -> int:
+    value = raw.get(key, default)
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ManifestError(f"`{key}` must be an integer >= {minimum}")
+    return value
+
+
+def load_quality(path: Path) -> QualityManifest:
+    raw = _load(path)
+    task = _task(raw)
+    if task not in CLASSIFICATION_TASKS:
+        raise ManifestError(
+            f"label-issue detection needs a classification task, got `{task}` "
+            f"(supported: {', '.join(sorted(CLASSIFICATION_TASKS))})"
+        )
+    classes, _ = _classes(raw, task)
+    folds = _int(raw, "folds", 5, 2)
+    max_rows = _int(raw, "max_rows", 50_000, 1)
+    if max_rows < folds:
+        raise ManifestError("`max_rows` must be at least `folds`")
+    return QualityManifest(
+        task=task,
+        classes=classes,
+        features=_features(raw),
+        data=_path(raw, "data", must_exist=True),
+        output=_path(raw, "output"),
+        folds=folds,
+        seed=_int(raw, "seed", 0, 0),
+        max_rows=max_rows,
+        top_n=_int(raw, "top_n", 50, 0),
+    )
+
+
+def load_fairness(path: Path) -> FairnessManifest:
+    raw = _load(path)
+    task = _task(raw)
+    if task not in SUPERVISED_TASKS:
+        raise ManifestError(
+            f"fairness needs a supervised task, got `{task}` "
+            f"(supported: {', '.join(sorted(SUPERVISED_TASKS))})"
+        )
+    classes, positive = _classes(raw, task)
+    sensitive = raw.get("sensitive")
+    if not isinstance(sensitive, dict) or not sensitive:
+        raise ManifestError("`sensitive` must be a non-empty object: attribute -> Parquet path")
+    sensitive = cast(dict[str, Any], sensitive)
+    paths: dict[str, Path] = {}
+    for name in sensitive:
+        if not name:
+            raise ManifestError("sensitive attribute names must be non-empty strings")
+        paths[name] = _path(sensitive, name, must_exist=True)
+    return FairnessManifest(
+        task=task,
+        classes=classes,
+        positive_class=positive,
+        truth=_path(raw, "truth", must_exist=True),
+        predictions=_path(raw, "predictions", must_exist=True),
+        sensitive=paths,
+        output=_path(raw, "output"),
+    )

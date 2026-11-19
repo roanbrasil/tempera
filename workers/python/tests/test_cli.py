@@ -199,3 +199,23 @@ def test_tabular_algorithm_without_extra_fails_cleanly(tmp_path: Path) -> None:
     )
     assert proc.returncode == 1
     assert "tabular" in events[-1]["msg"]
+
+
+@pytest.mark.parametrize(("command", "module"), [("quality", "cleanlab"), ("fairness", "fairlearn")])
+def test_quality_commands_without_extra_exit_1_with_hint(tmp_path: Path, command: str, module: str) -> None:
+    if importlib.util.find_spec(module) is not None:
+        pytest.skip(f"{module} is installed")
+    data = _dataset(tmp_path / "data.parquet")
+    manifest: dict[str, Any] = {
+        "task": "binary_classification",
+        "classes": ["no", "yes"],
+        "output": str(tmp_path / "report.json"),
+    }
+    if command == "quality":
+        manifest.update(features=FEATURES, data=str(data))
+    else:
+        manifest.update(truth=str(data), predictions=str(data), sensitive={"color": str(data)})
+    proc, events = run_manifest(command, manifest, tmp_path / "m.json")
+    assert proc.returncode == 1, proc.stderr
+    assert events[-1]["t"] == "error"
+    assert "`quality` extra" in events[-1]["msg"]
