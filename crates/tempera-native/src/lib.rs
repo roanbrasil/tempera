@@ -1,14 +1,14 @@
-//! Native Rust algorithms (linfa) for jobs that do not need Python.
+//! Native Rust algorithms for jobs that do not need Python.
 //!
 //! Implements the backend run contract (Contracts §7): a JSON [`Manifest`]
 //! comes in, JSONL [`Event`]s go out, predictions are written as Parquet and
 //! the model is saved under `<work_dir>/model/`.
 //!
-//! | Algorithm | Tasks | linfa crate |
+//! | Algorithm | Tasks | Implementation |
 //! |---|---|---|
-//! | `linear_regression` | regression | `linfa-linear` (least squares) |
+//! | `linear_regression` | regression | own normal-equation solver (`solve.rs`) |
 //! | `ridge` | regression | `linfa-elasticnet` with `l1_ratio = 0` |
-//! | `logistic_regression` | binary / multiclass | `linfa-logistic` (L2, L-BFGS) |
+//! | `logistic_regression` | binary / multiclass | own L-BFGS, L2 (`solve.rs`) |
 //! | `decision_tree` | binary / multiclass | `linfa-trees` (CART) |
 //!
 //! `decision_tree` has no regression variant: linfa-trees 0.8 only ships a
@@ -22,6 +22,7 @@ pub mod data;
 pub mod error;
 pub mod manifest;
 pub mod model;
+mod solve;
 
 use std::collections::BTreeMap;
 use std::io::Write;

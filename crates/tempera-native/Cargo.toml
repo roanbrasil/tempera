@@ -1,6 +1,6 @@
 [package]
 name = "tempera-native"
-description = "Native Rust backend (linfa): linear, ridge, logistic regression and decision trees."
+description = "Native Rust backend: linear, ridge, logistic regression (own solvers) and decision trees (linfa)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,8 +18,6 @@ arrow = { version = "60.1.0", default-features = false }
 parquet = { version = "60.1.0", default-features = false, features = ["arrow", "snap", "zstd", "lz4"] }
 ndarray = "0.16.1"
 linfa = "0.8.1"
-linfa-linear = "0.8.1"
-linfa-logistic = "0.8.1"
 linfa-trees = "0.8.1"
 linfa-elasticnet = "0.8.1"
 

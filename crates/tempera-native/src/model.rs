@@ -1,10 +1,9 @@
-//! Algorithms: fitted with linfa, stored as plain parameters so a saved model
-//! is independent of linfa's internal types and predicts identically.
+//! Algorithms: linear models use this crate's own solvers (`solve.rs`), ridge
+//! and trees use linfa. Everything is stored as plain parameters so a saved
+//! model is independent of any library's internal types.
 
 use linfa::prelude::*;
 use linfa_elasticnet::ElasticNet;
-use linfa_linear::LinearRegression;
-use linfa_logistic::{LogisticRegression, MultiLogisticRegression};
 use linfa_trees::{DecisionTree, SplitQuality, TreeNode};
 use ndarray::{Array1, Array2, ArrayView1};
 use serde::{Deserialize, Serialize};
@@ -13,6 +12,7 @@ use tempera_core::spec::TaskType;
 
 use crate::data::Predictions;
 use crate::error::NativeError;
+use crate::solve;
 
 /// Algorithms implemented by this backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,11 +153,8 @@ pub(crate) fn fit_regression(
     let (coef, intercept) = match algorithm {
         Algorithm::LinearRegression => {
             let fit_intercept = param(params, "fit_intercept", true)?;
-            let m = LinearRegression::new()
-                .with_intercept(fit_intercept)
-                .fit(&ds)
-                .map_err(training)?;
-            (m.params().to_vec(), m.intercept())
+            solve::least_squares(x, y, 0.0, fit_intercept)
+                .ok_or_else(|| training("least squares did not converge (non-finite data?)"))?
         }
         Algorithm::Ridge => {
             // sklearn-style `alpha`: minimizes ||y - Xw||² + alpha·||w||². linfa's
@@ -208,45 +205,38 @@ pub(crate) fn fit_classification(
             let alpha: f64 = param(params, "alpha", 1.0)?;
             let max_iter: u64 = param(params, "max_iterations", 100)?;
             let tol: f64 = param(params, "gradient_tolerance", 1e-4)?;
+            if !(alpha.is_finite() && alpha >= 0.0) {
+                return Err(NativeError::Manifest("param `alpha` must be >= 0".into()));
+            }
             if seen.len() == 2 {
-                let m = LogisticRegression::default()
-                    .alpha(alpha)
-                    .max_iterations(max_iter)
-                    .gradient_tolerance(tol)
-                    .fit(&ds)
-                    .map_err(training)?;
-                let coef = m.params().to_vec();
+                let (neg, pos) = (seen[0], seen[1]);
+                let yb: Vec<bool> = y.iter().map(|&c| c == pos).collect();
+                let (coef, intercept) = solve::logistic_binary(x, &yb, alpha, max_iter, tol);
                 let importance = coef.iter().map(|c| c.abs()).collect();
                 Ok(FitOutcome {
                     model: FittedModel::BinaryLogistic {
                         coef,
-                        intercept: m.intercept(),
-                        pos: m.labels().pos.class,
-                        neg: m.labels().neg.class,
+                        intercept,
+                        pos,
+                        neg,
                         n_classes,
                     },
                     column_importance: importance,
                 })
             } else {
-                let m = MultiLogisticRegression::default()
-                    .alpha(alpha)
-                    .max_iterations(max_iter)
-                    .gradient_tolerance(tol)
-                    .fit(&ds)
-                    .map_err(training)?;
-                // params: features × classes
-                let params_m = m.params();
-                let coef: Vec<Vec<f64>> = params_m.columns().into_iter().map(|c| c.to_vec()).collect();
-                let importance = params_m
-                    .rows()
-                    .into_iter()
-                    .map(|r| r.iter().map(|c| c.abs()).sum::<f64>() / r.len() as f64)
+                // Fit over the classes present in train, indexed 0..k.
+                let index: std::collections::HashMap<usize, usize> =
+                    seen.iter().enumerate().map(|(i, &c)| (c, i)).collect();
+                let yk: Vec<usize> = y.iter().map(|c| index[c]).collect();
+                let (coef, intercept) = solve::logistic_multinomial(x, &yk, seen.len(), alpha, max_iter, tol);
+                let importance = (0..x.ncols())
+                    .map(|j| coef.iter().map(|w| w[j].abs()).sum::<f64>() / coef.len() as f64)
                     .collect();
                 Ok(FitOutcome {
                     model: FittedModel::MultiLogistic {
                         coef,
-                        intercept: m.intercept().to_vec(),
-                        classes: m.classes().to_vec(),
+                        intercept,
+                        classes: seen,
                         n_classes,
                     },
                     column_importance: importance,

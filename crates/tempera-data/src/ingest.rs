@@ -80,7 +80,13 @@ impl Dataset {
     }
 }
 
+/// Lazily scans a local Parquet file. Only existing local files are accepted:
+/// Polars would treat `s3://…`/`https://…` as cloud sources (object_store),
+/// a code path Tempera never uses on purpose.
 pub fn scan_parquet(path: &Path) -> Result<LazyFrame> {
+    if !path.is_file() {
+        return Err(DataError::NotFound(path.to_path_buf()));
+    }
     Ok(LazyFrame::scan_parquet(
         PlRefPath::try_from_path(path)?,
         ScanArgsParquet::default(),
