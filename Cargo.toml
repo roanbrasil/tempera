@@ -47,6 +47,11 @@ hex = "0.4"
 encoding_rs = "0.8"
 tempfile = "3"
 
+# web
+axum = { version = "0.8", features = ["ws", "multipart"] }
+rust-embed = "8"
+mime_guess = "2"
+
 # persistence
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 

@@ -2,6 +2,9 @@
 
 mod builtin;
 mod candidates;
+mod draft;
+mod events;
+mod http;
 mod orchestrator;
 mod ui;
 mod workspace;
@@ -63,6 +66,13 @@ enum Command {
     },
     /// Print the path of a job's HTML report (the latest job by default).
     Report { job: Option<String> },
+    /// Start the web UI and HTTP API (default http://127.0.0.1:7070).
+    Up {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 7070)]
+        port: u16,
+    },
     /// Validate a tempera.yaml spec.
     Validate {
         #[arg(default_value = "tempera.yaml")]
@@ -112,6 +122,12 @@ async fn dispatch(cmd: Command) -> anyhow::Result<i32> {
             }
         }
         Command::Schema => print!("{}", tempera_core::schema::job_spec_schema()),
+        Command::Up { host, port } => {
+            let addr: std::net::SocketAddr = format!("{host}:{port}")
+                .parse()
+                .with_context(|| format!("invalid address {host}:{port}"))?;
+            http::serve(ws, addr).await?;
+        }
         Command::Ingest { data } => {
             let ws2 = ws.clone();
             let (ds, profile) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -284,37 +300,16 @@ async fn init(
         bail!("`{target}` is not a column (columns: {})", columns.join(", "));
     }
     let name = name.unwrap_or_else(|| {
-        let stem = data.file_stem().and_then(|s| s.to_str()).unwrap_or("job");
-        stem.chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '-'
-                }
-            })
-            .collect()
+        data.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("job")
+            .to_owned()
     });
     let base = output
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let source = pathdiff(data, base);
-    let time_hint = profile
-        .columns
-        .iter()
-        .find(|c| c.kind == tempera_data::ColumnKind::Datetime && c.name != target)
-        .map(|c| {
-            format!(
-                "  # time_column: {}   # uncomment if you will predict future rows\n",
-                c.name
-            )
-        })
-        .unwrap_or_default();
-    let yaml = format!(
-        "# Têmpera job spec. Reference: docs/wiki/Contracts.md · schema: `tempera schema`\nversion: 1\nname: {name}\ndata:\n  source: {source}\n  target: {target}\n{time_hint}  # group_column: customer_id   # rows of the same entity never split across train/test\n  # drop: []                    # columns to ignore (e.g. audit findings)\n# audit:\n#   acknowledge: []             # finding ids you reviewed and accept\nsplit:\n  test_size: 0.2\n  seed: 42\n"
-    );
-    JobSpec::from_yaml(&yaml).context("generated spec is invalid (bug)")?;
+    let yaml = draft::draft_yaml(&profile, &pathdiff(data, base), Some(&target), &name)?;
     std::fs::write(output, yaml)?;
     println!(
         "✓ wrote {} (target `{target}`). Next: tempera audit {0} && tempera run {0}",

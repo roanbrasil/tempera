@@ -22,6 +22,9 @@ tempera-native = { path = "../tempera-native" }
 tempera-report = { path = "../tempera-report" }
 tempera-track = { path = "../tempera-track" }
 anyhow.workspace = true
+axum.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
 clap.workspace = true
 polars.workspace = true
 serde.workspace = true
@@ -32,6 +35,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

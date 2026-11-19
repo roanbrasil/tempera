@@ -245,3 +245,86 @@ Same row order as the input.
 
 `0` success (a `done` event was emitted) · `1` unexpected error · `2` bad manifest / unknown algorithm ·
 `3` stopped by signal (checkpoint saved when supported).
+
+## 8. Unsupervised tasks (clustering, anomaly detection)
+
+Same manifests and commands as §7, with these differences.
+
+**Model-ready Parquet.** `__target__` is absent for clustering. For anomaly detection it is present only
+when the user has labels; it is used for **evaluation only** and backends must never read it during `fit`.
+
+**Fit manifest.** `task` is `clustering` or `anomaly_detection`; `classes`/`positive_class` are omitted.
+For anomaly detection with labels, the orchestrator passes `"positive_class"` (the anomaly label) so the
+backend can name its prediction column consistently, but still must not train on it.
+
+**Predictions Parquet** (same row order as the input):
+
+| Task | Columns |
+|---|---|
+| Clustering | `cluster` (Int64; `-1` = noise, e.g. DBSCAN) |
+| Anomaly detection | `anomaly_score` (Float64, **higher = more anomalous**) + `prediction` (Utf8: `anomaly` / `normal`) |
+
+**Metrics.** Cluster quality depends on the model's own feature space (scaling, one-hot, PCA), so for
+clustering the **backend** computes it and emits, for every `predict` entry and for the `predict`
+command, metric events without a step:
+
+| Event name | Meaning |
+|---|---|
+| `eval/silhouette` | silhouette on up to 10,000 rows, noise excluded (NaN → omitted when < 2 clusters) |
+| `eval/davies_bouldin` | lower is better |
+| `eval/n_clusters` | clusters found (noise excluded) |
+| `eval/noise_fraction` | share of rows labeled `-1` |
+
+For `fit`, these refer to the **first** `predict` entry (the validation set). Anomaly detection with labels
+is scored in Rust from `anomaly_score` (PR-AUC, ROC-AUC); without labels there is nothing to rank and only
+one candidate runs.
+
+**Algorithms** (registry keys): clustering → `kmeans` (picks k in 2..10 by silhouette unless
+`n_clusters` is given), `dbscan` (`eps` estimated from k-distance when not given), `pca_kmeans` (PCA keeping
+95% of the variance, then k-means; emits `pca/explained_variance` and `pca/components`);
+anomaly detection → `isolation_forest`.
+
+## 9. HTTP API and live events (M2)
+
+Served by `tempera up` (default `http://127.0.0.1:7070`); the web UI is a static build embedded in the
+binary and served from `/`. JSON everywhere; errors are `{"error": "<message>", "issues": [...]?}` with a
+4xx/5xx status. All paths are under `/api/v1`.
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/health` | → `{"ok": true, "version": "0.1.0"}` |
+| POST | `/datasets` | multipart field `file` (csv/tsv/parquet/jsonl) → `{"dataset": Dataset, "profile": Profile}` |
+| GET | `/datasets/{id}` | → `{"dataset": Dataset, "profile": Profile}` |
+| POST | `/specs/validate` | `{"yaml": "..."}` → `{"valid": bool, "issues": [{"path","message"}]}` |
+| POST | `/specs/draft` | `{"dataset_id", "target"?, "name"?}` → `{"yaml": "..."}` (same output as `tempera init`) |
+| POST | `/audit` | `{"yaml": "..."}` → `{"inference": TaskInference, "audit": AuditReport}` |
+| GET | `/algorithms` | → `[{"key","backend","tasks":[...]}]` |
+| GET | `/machines` | → `[{"id":"local","kind":"local","hardware":{os,arch,cpu_cores,ram_bytes,gpus:[{name,vram_bytes}]},"status":"ready"}]` |
+| POST | `/jobs` | `{"yaml": "..."}` → `202 {"job_id"}` (runs in the background) |
+| GET | `/jobs` | → `[JobRow]` newest first |
+| GET | `/jobs/{id}` | → `{"job": JobRow, "runs": [RunRow]}` |
+| POST | `/jobs/{id}/cancel` | → `202 {}` |
+| GET | `/jobs/{id}/report` | → the HTML report (`text/html`) |
+| GET | `/runs/{id}/metrics?name=` | → `[MetricPoint]` |
+| WS | `/jobs/{id}/events` | live event stream (below); on connect the server first replays past events |
+
+`Dataset`, `Profile`, `TaskInference`, `AuditReport`, `JobRow`, `RunRow`, `MetricPoint` are the
+serde shapes of the Rust types (`tempera-data`, `tempera-audit`, `tempera-track`).
+
+**Live events** (one JSON object per WebSocket text message, field `type`):
+
+```json
+{"type":"stage","stage":"ingest|profile|audit|split|train|evaluate|report","message":"..."}
+{"type":"audit","inference":{...},"audit":{...}}
+{"type":"blocked","findings":[...]}
+{"type":"run_started","run_id":"...","algorithm":"lightgbm","backend":"python","index":3,"total":7}
+{"type":"metric","run_id":"...","name":"valid/binary_logloss","step":12,"value":0.41}
+{"type":"progress","run_id":"...","step":120,"total_steps":500,"eta_s":31.5,"job_eta_s":95.0}
+{"type":"log","run_id":"...","level":"warn","message":"..."}
+{"type":"run_finished","run_id":"...","status":"succeeded","valid_score":0.87,"valid_metrics":{...},"duration_s":4.2,"error":null}
+{"type":"winner","run_id":"...","algorithm":"lightgbm","test":{...Evaluation}}
+{"type":"job_finished","status":"succeeded|failed|blocked|cancelled","report_url":"/api/v1/jobs/<id>/report","error":null}
+```
+
+`eta_s` is the remaining time of the current run (warm-up + EMA of the step time); `job_eta_s` adds an
+estimate for the runs not started yet (median duration of finished runs).

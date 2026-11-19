@@ -21,6 +21,7 @@ use tempera_track::{MetricPoint, Tracker};
 
 use crate::builtin;
 use crate::candidates::{BackendKind, Candidate, candidates};
+use crate::events::{self, Eta, JobEvent};
 use crate::ui;
 use crate::workspace::{Workspace, python_available, worker_dir};
 
@@ -43,14 +44,19 @@ pub struct Prepared {
 
 pub fn load_spec(path: &Path) -> anyhow::Result<(JobSpec, String)> {
     let text = std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let mut spec = JobSpec::from_yaml(&text).map_err(|e| anyhow!("{}: {e}", path.display()))?;
-    // Data paths are relative to the spec file.
+    let base = path.parent().unwrap_or(Path::new("."));
+    let spec = parse_spec(&text, base).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+    Ok((spec, text))
+}
+
+/// Parses a spec; relative data paths are resolved against `base`.
+pub fn parse_spec(text: &str, base: &Path) -> anyhow::Result<JobSpec> {
+    let mut spec = JobSpec::from_yaml(text).map_err(|e| anyhow!("{e}"))?;
     let source = Path::new(&spec.data.source);
     if source.is_relative() && !spec.data.source.contains("://") {
-        let base = path.parent().unwrap_or(Path::new("."));
         spec.data.source = base.join(source).display().to_string();
     }
-    Ok((spec, text))
+    Ok(spec)
 }
 
 /// Ingest, profile, infer and audit (blocking work; call from `spawn_blocking`).
@@ -108,11 +114,60 @@ pub fn print_audit(audit: &AuditReport) {
 }
 
 pub async fn run_job(ws: &Workspace, spec_path: &Path) -> anyhow::Result<JobOutcome> {
-    let started = Instant::now();
     let (spec, spec_text) = load_spec(spec_path)?;
+    run_spec(ws, spec, spec_text, &spec_path.display().to_string(), None).await
+}
+
+/// Runs a parsed spec. `job_id` is pre-assigned by the HTTP server (which has
+/// already registered it for live events); the CLI lets it be generated.
+pub async fn run_spec(
+    ws: &Workspace,
+    spec: JobSpec,
+    spec_text: String,
+    spec_label: &str,
+    job_id: Option<String>,
+) -> anyhow::Result<JobOutcome> {
+    let job_id = job_id.unwrap_or_else(|| new_job_id(&spec.name));
+    let result = run_spec_inner(ws, spec, spec_text, spec_label, &job_id).await;
+    let (status, error, report_url) = match &result {
+        Ok(o) if o.blocked => ("blocked", None, None),
+        Ok(_) if events::is_cancelled(&job_id) => {
+            ("cancelled", None, Some(format!("/api/v1/jobs/{job_id}/report")))
+        }
+        Ok(_) => ("succeeded", None, Some(format!("/api/v1/jobs/{job_id}/report"))),
+        Err(e) => ("failed", Some(format!("{e:#}")), None),
+    };
+    events::emit(
+        &job_id,
+        JobEvent::JobFinished {
+            status,
+            report_url,
+            error,
+        },
+    );
+    result
+}
+
+pub fn generate_job_id(name: &str) -> String {
+    new_job_id(name)
+}
+
+fn stage(job_id: &str, stage: &'static str, message: String) {
+    events::emit(job_id, JobEvent::Stage { stage, message });
+}
+
+async fn run_spec_inner(
+    ws: &Workspace,
+    spec: JobSpec,
+    spec_text: String,
+    spec_label: &str,
+    job_id: &str,
+) -> anyhow::Result<JobOutcome> {
+    let started = Instant::now();
+    let job_id = job_id.to_owned();
     let tracker = Tracker::open(&ws.db_path()).await?;
-    let job_id = new_job_id(&spec.name);
     tracker.create_job(&job_id, &spec.name, &spec_text).await?;
+    stage(&job_id, "ingest", format!("reading {}", spec.data.source));
     ui::header(&format!("Job {job_id}"));
 
     let ws2 = ws.clone();
@@ -133,6 +188,13 @@ pub async fn run_job(ws: &Workspace, spec_path: &Path) -> anyhow::Result<JobOutc
         audit,
     } = prepared;
     print_audit(&audit);
+    events::emit(
+        &job_id,
+        JobEvent::Audit {
+            inference: serde_json::to_value(&inference)?,
+            audit: serde_json::to_value(&audit)?,
+        },
+    );
     if audit.blocked {
         tracker
             .update_job_context(
@@ -147,6 +209,12 @@ pub async fn run_job(ws: &Workspace, spec_path: &Path) -> anyhow::Result<JobOutc
             .set_job_status(&job_id, "blocked", Some("audit found unresolved red findings"))
             .await?;
         ui::blocked(&audit);
+        events::emit(
+            &job_id,
+            JobEvent::Blocked {
+                findings: serde_json::to_value(audit.blocking().collect::<Vec<_>>())?,
+            },
+        );
         return Ok(JobOutcome {
             job_id,
             blocked: true,
@@ -154,6 +222,7 @@ pub async fn run_job(ws: &Workspace, spec_path: &Path) -> anyhow::Result<JobOutc
         });
     }
 
+    stage(&job_id, "split", "building train / valid / test".into());
     let (spec2, ds2, plan, task) = (spec.clone(), ds.clone(), audit.plan.clone(), inference.task);
     let split = tokio::task::spawn_blocking(move || make_split(&ds2, &spec2, task, &plan)).await??;
     tracker
@@ -176,11 +245,12 @@ pub async fn run_job(ws: &Workspace, spec_path: &Path) -> anyhow::Result<JobOutc
     let job_dir = ws.job_dir(&job_id);
     std::fs::create_dir_all(&job_dir)?;
     let result = train_and_report(
-        ws, &tracker, &job_id, &job_dir, &spec, &spec_text, spec_path, &ds, &inference, &audit, &split,
+        ws, &tracker, &job_id, &job_dir, &spec, &spec_text, spec_label, &ds, &inference, &audit, &split,
         started,
     )
     .await;
     match &result {
+        Ok(_) if events::is_cancelled(&job_id) => tracker.set_job_status(&job_id, "cancelled", None).await?,
         Ok(_) => tracker.set_job_status(&job_id, "succeeded", None).await?,
         Err(e) => {
             tracker
@@ -203,7 +273,7 @@ async fn train_and_report(
     job_dir: &Path,
     spec: &JobSpec,
     spec_text: &str,
-    spec_path: &Path,
+    spec_label: &str,
     ds: &Dataset,
     inference: &tempera_data::TaskInference,
     audit: &AuditReport,
@@ -259,27 +329,57 @@ async fn train_and_report(
         cands.len(),
         metric_name(metric)
     ));
-    let mut summaries = Vec::new();
+    stage(job_id, "train", format!("{} candidates", cands.len()));
+    let mut summaries: Vec<RunSummary> = Vec::new();
     for (i, cand) in cands.iter().enumerate() {
         let run_id = format!("{job_id}-r{}", i + 1);
-        let summary = if cand.backend == BackendKind::Python {
-            if let Err(why) = &python {
-                skipped(tracker, job_id, &run_id, cand, why).await?
-            } else {
-                run_candidate(
-                    tracker, &hub, job_id, &run_id, job_dir, cand, spec, split, task, metric,
-                )
-                .await?
-            }
+        events::emit(
+            job_id,
+            JobEvent::RunStarted {
+                run_id: run_id.clone(),
+                algorithm: cand.algorithm.clone(),
+                backend: cand.backend.as_str().to_owned(),
+                index: i + 1,
+                total: cands.len(),
+            },
+        );
+        // Job ETA: the runs after this one at the median duration of the finished ones.
+        let mut done: Vec<f64> = summaries
+            .iter()
+            .filter(|s| s.status == "succeeded")
+            .map(|s| s.duration_s)
+            .collect();
+        done.sort_by(f64::total_cmp);
+        let rest_s = done.get(done.len() / 2).map(|m| m * (cands.len() - i - 1) as f64);
+        let summary = if events::is_cancelled(job_id) {
+            skipped(tracker, job_id, &run_id, cand, "cancelled").await?
+        } else if let (BackendKind::Python, Err(why)) = (cand.backend, &python) {
+            skipped(tracker, job_id, &run_id, cand, why).await?
         } else {
             run_candidate(
-                tracker, &hub, job_id, &run_id, job_dir, cand, spec, split, task, metric,
+                tracker, &hub, job_id, &run_id, job_dir, cand, spec, split, task, metric, rest_s,
             )
             .await?
         };
         ui::run_line(&summary, metric);
+        events::emit(
+            job_id,
+            JobEvent::RunFinished {
+                run_id: run_id.clone(),
+                status: summary.status.clone(),
+                valid_score: summary.valid_score.filter(|v| v.is_finite()),
+                valid_metrics: serde_json::to_value(&summary.valid_metrics)?,
+                duration_s: summary.duration_s,
+                error: summary.error.clone(),
+            },
+        );
         summaries.push(summary);
     }
+    stage(
+        job_id,
+        "evaluate",
+        "evaluating the winner once on the test set".into(),
+    );
 
     // Leaderboard: best validation score first; failed/skipped last.
     let hib = higher_is_better(metric);
@@ -301,9 +401,10 @@ async fn train_and_report(
         }
     });
 
+    let unranked = task == TaskType::AnomalyDetection && split.classes.is_empty();
     let winner = match summaries
-        .first()
-        .filter(|s| s.status == "succeeded" && s.valid_score.is_some())
+        .iter()
+        .find(|s| s.status == "succeeded" && (s.valid_score.is_some() || unranked))
     {
         None => None,
         Some(best) => {
@@ -324,7 +425,16 @@ async fn train_and_report(
     }
     if let Some(w) = &winner {
         ui::verdict(w, metric, &summaries);
+        events::emit(
+            job_id,
+            JobEvent::Winner {
+                run_id: w.run_id.clone(),
+                algorithm: w.algorithm.clone(),
+                test: serde_json::to_value(&w.test)?,
+            },
+        );
     }
+    stage(job_id, "report", "writing the report".into());
 
     let data = ReportData {
         job_id: job_id.to_owned(),
@@ -350,7 +460,7 @@ async fn train_and_report(
             cost_usd: 0.0,
         },
         spec_yaml: spec_text.to_owned(),
-        reproduce_command: format!("tempera run {}", spec_path.display()),
+        reproduce_command: format!("tempera run {spec_label}"),
     };
     let report = job_dir.join("report.html");
     std::fs::write(&report, tempera_report::render(&data))?;
@@ -437,6 +547,7 @@ async fn run_candidate(
     split: &Split,
     task: TaskType,
     metric: tempera_core::spec::Metric,
+    rest_s: Option<f64>,
 ) -> anyhow::Result<RunSummary> {
     let t = Instant::now();
     let work = job_dir.join("runs").join(run_id);
@@ -453,7 +564,7 @@ async fn run_candidate(
         )
         .await?;
 
-    let outcome: anyhow::Result<Option<String>> = match cand.backend {
+    let outcome: anyhow::Result<(Option<String>, BTreeMap<String, f64>)> = match cand.backend {
         BackendKind::Builtin => {
             let (train, valid, out) = (
                 split.path(Partition::Train),
@@ -467,7 +578,7 @@ async fn run_candidate(
                 _ => builtin::mean(&train, &valid, &out),
             })
             .await?
-            .map(|()| None)
+            .map(|()| (None, BTreeMap::new()))
         }
         BackendKind::Native | BackendKind::Python => {
             let manifest = fit_manifest(cand, spec, split, task, &work, &valid_pred);
@@ -480,21 +591,23 @@ async fn run_candidate(
                 JobCommand::Fit,
                 serde_json::to_string(&manifest)?,
                 true,
+                rest_s,
             )
             .await
-            .map(|()| Some(work.join("model").display().to_string()))
+            .map(|evals| (Some(work.join("model").display().to_string()), evals))
         }
     };
     let duration = t.elapsed().as_secs_f64();
     match outcome {
-        Ok(model_dir) => {
-            let e = evaluate(
+        Ok((model_dir, evals)) => {
+            let mut e = evaluate(
                 task,
                 &split.classes,
                 split.positive_class.as_deref(),
                 &split.path(Partition::Valid),
                 &valid_pred,
             )?;
+            e.metrics.extend(evals);
             let score = e.get(metric);
             tracker
                 .finish_run(
@@ -554,7 +667,8 @@ async fn dispatch(
     command: JobCommand,
     manifest_json: String,
     record: bool,
-) -> anyhow::Result<()> {
+    rest_s: Option<f64>,
+) -> anyhow::Result<BTreeMap<String, f64>> {
     let start = StartJob {
         job_id: job_id.to_owned(),
         run_id: run_id.to_owned(),
@@ -569,9 +683,65 @@ async fn dispatch(
     };
     let mut rx = hub.start(LOCAL_MACHINE, start).await?;
     let mut points = Vec::new();
-    while let Some(m) = rx.recv().await {
+    // Backend-computed evaluation metrics (clustering quality, §8), last value wins.
+    let mut evals = BTreeMap::new();
+    let mut eta = Eta::default();
+    let mut cancel_sent = false;
+    // ETA quality (#27): predicted total duration taken at ~10% progress vs the real one.
+    let started = Instant::now();
+    let mut predicted_total: Option<f64> = None;
+    loop {
+        let m = tokio::select! {
+            m = rx.recv() => m,
+            () = events::cancelled(job_id), if !cancel_sent => {
+                cancel_sent = true;
+                let _ = hub.cancel(LOCAL_MACHINE, job_id, true).await;
+                continue;
+            }
+        };
+        let Some(m) = m else { break };
         match m.msg {
+            Some(agent_message::Msg::Progress(p)) => {
+                let eta_s = eta.update(p.step, p.total_steps);
+                if predicted_total.is_none()
+                    && let (Some(e), Some(total)) = (eta_s, p.total_steps)
+                    && total > 0
+                    && p.step * 10 >= total
+                {
+                    predicted_total = Some(started.elapsed().as_secs_f64() + e);
+                }
+                events::emit(
+                    job_id,
+                    JobEvent::Progress {
+                        run_id: run_id.to_owned(),
+                        step: p.step,
+                        total_steps: p.total_steps,
+                        eta_s,
+                        job_eta_s: eta_s.map(|e| e + rest_s.unwrap_or(0.0)),
+                    },
+                );
+            }
             Some(agent_message::Msg::Metrics(b)) => {
+                if record {
+                    for p in &b.metrics {
+                        events::emit(
+                            job_id,
+                            JobEvent::Metric {
+                                run_id: run_id.to_owned(),
+                                name: p.name.clone(),
+                                step: p.step.map(|s| s as i64),
+                                value: p.value,
+                            },
+                        );
+                    }
+                }
+                for p in &b.metrics {
+                    if let Some(k) = p.name.strip_prefix("eval/")
+                        && p.value.is_finite()
+                    {
+                        evals.insert(k.to_owned(), p.value);
+                    }
+                }
                 points.extend(b.metrics.into_iter().map(|p| MetricPoint {
                     name: p.name,
                     step: p.step.map(|s| s as i64),
@@ -584,17 +754,41 @@ async fn dispatch(
             }
             Some(agent_message::Msg::Logs(l)) => {
                 for line in l.lines {
+                    let level = match tempera_proto::v1::LogLevel::try_from(line.level) {
+                        Ok(tempera_proto::v1::LogLevel::Warn) => "warn",
+                        Ok(tempera_proto::v1::LogLevel::Error) => "error",
+                        Ok(tempera_proto::v1::LogLevel::Debug) => "debug",
+                        Ok(tempera_proto::v1::LogLevel::Raw) => "raw",
+                        _ => "info",
+                    };
+                    events::emit(
+                        job_id,
+                        JobEvent::Log {
+                            run_id: run_id.to_owned(),
+                            level,
+                            message: line.message.clone(),
+                        },
+                    );
                     ui::backend_log(line.level, &line.message);
                 }
             }
             Some(agent_message::Msg::Finished(f)) => {
                 if record {
+                    if let Some(pred) = predicted_total {
+                        let actual = started.elapsed().as_secs_f64().max(1e-6);
+                        points.push(MetricPoint {
+                            name: "eta/relative_error".into(),
+                            step: None,
+                            value: (pred - actual) / actual,
+                            unix_ms: 0,
+                        });
+                    }
                     tracker.add_metrics(run_id, &points).await?;
                     for a in f.artifacts {
                         tracker.add_artifact(run_id, &a.kind, &a.format, &a.uri).await?;
                     }
                 }
-                return Ok(());
+                return Ok(evals);
             }
             Some(agent_message::Msg::Failed(f)) => {
                 if record {
@@ -634,7 +828,11 @@ fn fit_manifest(
     work: &Path,
     valid_pred: &Path,
 ) -> Manifest {
-    let classification = !split.classes.is_empty();
+    // Classes go only to classifiers; anomaly labels are for evaluation (§8).
+    let classification = matches!(
+        task,
+        TaskType::BinaryClassification | TaskType::MulticlassClassification
+    );
     Manifest {
         algorithm: cand.algorithm.clone(),
         task,
@@ -692,6 +890,7 @@ async fn evaluate_winner(
     let work = job_dir.join("runs").join(&best.run_id);
     let test_pred = work.join("test_pred.parquet");
     let test = split.path(Partition::Test);
+    let mut test_evals = BTreeMap::new();
     match cand.backend {
         BackendKind::Builtin => {
             let (train, classes, t, out, algo) = (
@@ -715,7 +914,7 @@ async fn evaluate_winner(
                 input: abs(&test),
                 output: abs(&test_pred),
             };
-            dispatch(
+            test_evals = dispatch(
                 tracker,
                 hub,
                 job_id,
@@ -724,18 +923,20 @@ async fn evaluate_winner(
                 JobCommand::Predict,
                 serde_json::to_string(&pm)?,
                 false,
+                None,
             )
             .await
             .context("predicting the test set with the winner")?;
         }
     }
-    let eval: Evaluation = evaluate(
+    let mut eval: Evaluation = evaluate(
         task,
         &split.classes,
         split.positive_class.as_deref(),
         &test,
         &test_pred,
     )?;
+    eval.metrics.extend(test_evals);
     let mut importance: Vec<(String, f64)> = tracker
         .metrics(&best.run_id, None)
         .await?

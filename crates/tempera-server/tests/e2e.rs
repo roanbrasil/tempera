@@ -139,3 +139,50 @@ fn init_writes_a_valid_spec() {
     let v = tempera(tmp.path(), &["validate", out_path.to_str().unwrap()]);
     assert!(v.status.success(), "{}", String::from_utf8_lossy(&v.stderr));
 }
+
+fn python_enabled() -> bool {
+    std::env::var_os("TEMPERA_E2E_PYTHON").is_some()
+}
+
+#[test]
+fn clustering_end_to_end() {
+    if !python_enabled() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = write_spec(
+        tmp.path(),
+        "segments.yaml",
+        "version: 1\nname: segments\ndata: { source: $DATA/segments.csv }\nstrategy: { candidates: [kmeans] }\n",
+    );
+    let out = tempera(tmp.path(), &["run", spec.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("Winner    kmeans"), "{stdout}");
+    assert!(stdout.contains("silhouette"), "{stdout}");
+}
+
+#[test]
+fn anomaly_detection_end_to_end() {
+    if !python_enabled() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = write_spec(
+        tmp.path(),
+        "fraud.yaml",
+        "version: 1\nname: fraud\ndata: { source: $DATA/transactions.csv, target: is_fraud }\ntask: { type: anomaly_detection, metric: pr_auc }\n",
+    );
+    let out = tempera(tmp.path(), &["run", spec.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("Winner    isolation_forest"), "{stdout}");
+}

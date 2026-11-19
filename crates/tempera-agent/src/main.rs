@@ -8,7 +8,6 @@
 //!   both backends identically (ADR-0003).
 
 mod job;
-mod system;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -122,7 +121,7 @@ async fn connect(
         agent_version: env!("CARGO_PKG_VERSION").to_owned(),
         machine_id: machine_id.clone(),
         auth_token: token,
-        hardware: Some(system::hardware()),
+        hardware: Some(tempera_exec::system::hardware()),
         running_jobs: Vec::new(),
     })))
     .await?;
