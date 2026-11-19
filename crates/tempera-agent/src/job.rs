@@ -315,6 +315,8 @@ fn backend_command(
     let action = match JobCommand::try_from(start.command) {
         Ok(JobCommand::Fit) => "fit",
         Ok(JobCommand::Predict) => "predict",
+        Ok(JobCommand::Quality) => "quality",
+        Ok(JobCommand::Fairness) => "fairness",
         _ => return Err("StartJob.command must be FIT or PREDICT".into()),
     };
     match Backend::try_from(start.backend) {
@@ -340,16 +342,12 @@ fn backend_command(
             c.arg("run")
                 .arg("--project")
                 .arg(&dir)
-                .args([
-                    "--extra",
-                    "tabular",
-                    "--quiet",
-                    "python",
-                    "-m",
-                    "tempera_worker",
-                    action,
-                    "--manifest",
-                ])
+                .args(["--extra", "tabular"]);
+            // Data-quality commands need cleanlab/fairlearn (the `quality` extra).
+            if matches!(action, "quality" | "fairness") {
+                c.args(["--extra", "quality"]);
+            }
+            c.args(["--quiet", "python", "-m", "tempera_worker", action, "--manifest"])
                 .arg(manifest);
             Ok(c)
         }

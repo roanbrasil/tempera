@@ -280,7 +280,7 @@ async fn run_spec_inner(
     let job_dir = ws.job_dir(&job_id);
     std::fs::create_dir_all(&job_dir)?;
     let result = train_and_report(
-        ws, &tracker, &job_id, &job_dir, &spec, &spec_text, spec_label, &ds, &inference, &audit, &split,
+        ws, &tracker, &job_id, &job_dir, &spec, &spec_text, spec_label, &ds, &inference, &mut audit, &split,
         started,
     )
     .await;
@@ -311,7 +311,7 @@ async fn train_and_report(
     spec_label: &str,
     ds: &Dataset,
     inference: &tempera_data::TaskInference,
-    audit: &AuditReport,
+    audit: &mut AuditReport,
     split: &Split,
     started: Instant,
 ) -> anyhow::Result<PathBuf> {
@@ -364,6 +364,14 @@ async fn train_and_report(
         cands.len(),
         metric_name(metric)
     ));
+    // A7: suspected label errors (Python worker, cleanlab); never blocks.
+    if python.is_ok() && agent.is_some() && !events::is_cancelled(job_id) {
+        stage(job_id, "audit", "checking labels for likely errors".into());
+        if let Some(f) = crate::quality::label_issues(tracker, &hub, job_id, job_dir, split).await {
+            ui::finding(&f);
+            tempera_audit::add_findings(audit, spec, vec![f]);
+        }
+    }
     stage(job_id, "train", format!("{} candidates", cands.len()));
     let mut summaries: Vec<RunSummary> = Vec::new();
     for (i, cand) in cands.iter().enumerate() {
@@ -475,6 +483,20 @@ async fn train_and_report(
             }
         }
     };
+    // A8: fairness of the winner's test predictions per sensitive attribute.
+    if let Some(w) = &winner
+        && python.is_ok()
+        && agent.is_some()
+        && !spec.data.sensitive.is_empty()
+    {
+        let test_pred = job_dir.join("runs").join(&w.run_id).join("test_pred.parquet");
+        let found = crate::quality::fairness(tracker, &hub, job_id, job_dir, split, &test_pred).await;
+        for f in &found {
+            ui::finding(f);
+        }
+        tempera_audit::add_findings(audit, spec, found);
+    }
+    tempera_audit::save(ds, audit)?;
     if let Some(exec) = agent {
         exec.stop(&hub).await;
     }
@@ -870,7 +892,7 @@ async fn run_candidate(
 
 /// Sends one job to the local agent and drains its messages into the tracker.
 #[allow(clippy::too_many_arguments)]
-async fn dispatch(
+pub(crate) async fn dispatch(
     tracker: &Tracker,
     hub: &Hub,
     job_id: &str,

@@ -23,8 +23,10 @@ use crate::ingest::{Dataset, scan_parquet};
 pub const TARGET: &str = "__target__";
 pub const GROUP: &str = "__group__";
 pub const TIME: &str = "__time__";
+/// Prefix of sensitive-attribute columns in the model-ready layout.
+pub const SENSITIVE_PREFIX: &str = "__sens__";
 /// Bump when the split layout or algorithm changes.
-pub const SPLIT_VERSION: u32 = 1;
+pub const SPLIT_VERSION: u32 = 2;
 
 /// The three feature kinds backends understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -330,6 +332,16 @@ fn model_ready(
         }
         exprs.push(col(g.as_str()).cast(DataType::String).alias(GROUP));
     }
+    // Sensitive attributes travel with the rows (for the fairness report) but are never features.
+    for sens in &spec.data.sensitive {
+        if has(sens) {
+            exprs.push(
+                col(sens.as_str())
+                    .cast(DataType::String)
+                    .alias(format!("{SENSITIVE_PREFIX}{sens}")),
+            );
+        }
+    }
     if let Some(tc) = &spec.data.time_column {
         if !has(tc) {
             return Err(DataError::MissingColumn(tc.clone()));
@@ -523,6 +535,7 @@ fn split_id(
         "test_size": spec.split.test_size,
         "seed": spec.split.seed,
         "plan": plan,
+        "sensitive": spec.data.sensitive,
     });
     let digest = Sha256::digest(serde_json::to_vec(&key)?);
     Ok(hex::encode(&digest[..8]))

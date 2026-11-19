@@ -188,6 +188,8 @@ enum Command {
   COMMAND_UNSPECIFIED = 0;
   COMMAND_FIT = 1;
   COMMAND_PREDICT = 2;
+  COMMAND_QUALITY = 3;   // label-issue detection (Python, cleanlab)
+  COMMAND_FAIRNESS = 4;  // group fairness of test predictions (Python, fairlearn)
 }
 
 enum Backend {
