@@ -3,6 +3,7 @@
 //! explains. See docs/wiki/Data-Audit.md and ADR-0004.
 
 pub mod advanced;
+pub mod privacy;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -281,6 +282,10 @@ pub fn audit(
     if !target.is_empty() {
         findings.extend(leakage(lf, &target, inference.task, &plan)?);
     }
+
+    // ---- M3: A11 personal data, A9 sensitive proxies ----
+    findings.extend(privacy::personal_data(ds, profile)?);
+    findings.extend(privacy::sensitive_proxies(ds, spec, &plan)?);
 
     // ---- M3: A3 entities, A12 small samples, A13 informative missingness ----
     findings.extend(advanced::repeated_entities(profile, spec, &reserved));

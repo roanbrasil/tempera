@@ -45,6 +45,24 @@ fn base_rows(n: u64, extra_header: &str, extra: impl Fn(u64, bool) -> String) ->
     s
 }
 
+/// A valid CPF built from a seed (check digits computed).
+fn cpf(i: u64) -> String {
+    let mut d: Vec<u32> = format!("{:09}", (i * 7_919 + 123_456_789) % 1_000_000_000)
+        .chars()
+        .filter_map(|c| c.to_digit(10))
+        .collect();
+    for n in [9usize, 10] {
+        let sum: u32 = (0..n).map(|k| d[k] * (n as u32 + 1 - k as u32)).sum();
+        let r = (sum * 10) % 11;
+        d.push(if r == 10 { 0 } else { r });
+    }
+    let s: String = d
+        .iter()
+        .map(|x| char::from_digit(*x, 10).unwrap_or('0'))
+        .collect();
+    format!("{}.{}.{}-{}", &s[0..3], &s[3..6], &s[6..9], &s[9..11])
+}
+
 fn cases() -> Vec<Case> {
     vec![
         Case {
@@ -194,6 +212,35 @@ fn cases() -> Vec<Case> {
                 }
             }),
             spec_extra: "",
+            target: Some("label"),
+        },
+        Case {
+            name: "A11 e-mail column",
+            expect: "A11:contact",
+            csv: base_rows(800, ",contact", |i, _| format!(",user{i}@example.com")),
+            spec_extra: "",
+            target: Some("label"),
+        },
+        Case {
+            name: "A11 CPF column",
+            expect: "A11:document",
+            csv: base_rows(800, ",document", |i, _| format!(",{}", cpf(i))),
+            spec_extra: "",
+            target: Some("label"),
+        },
+        Case {
+            name: "A9 sensitive proxy",
+            expect: "A9:title",
+            csv: base_rows(1500, ",gender,title", |i, _| {
+                let female = rng(i, 21) < 0.5;
+                let title = if rng(i, 22) < 0.95 {
+                    if female { "ms" } else { "mr" }
+                } else {
+                    "dr"
+                };
+                format!(",{},{title}", if female { "f" } else { "m" })
+            }),
+            spec_extra: ", sensitive: [gender]",
             target: Some("label"),
         },
     ]
