@@ -1,10 +1,14 @@
 # Uma coluna, AUC de 0,99, e o modelo estava errado: por que treinar ML direito é problema de sistema
 
+![Dados crus entram na forja e saem como um modelo confiável](img/cover.jpg)
+
 *Construí o Têmpera, uma plataforma que audita os dados antes de treinar e roda na máquina mais barata que resolve. Rust no sistema, Python no ecossistema de ML.*
 
 Um dataset de churn, uma coluna chamada `refund_amount` e um AUC de 0,993 com essa coluna sozinha. Quem já treinou modelo de churn sabe o fim da história: o reembolso só existe *depois* que o cliente cancelou. O modelo não aprendeu a prever churn, aprendeu a ler o futuro. No notebook fica lindo; em produção, a coluna chega vazia e o modelo desaba.
 
 Esse erro não é falta de conhecimento. Todo cientista de dados sabe o que é leakage. O erro acontece porque nada no fluxo de trabalho impede que ele aconteça. E foi isso que me fez parar de tratar "treinar do jeito certo" como disciplina pessoal e começar a tratar como problema de engenharia de sistemas.
+
+![Um modelo espiando o futuro, barrado pela auditoria](img/leakage.jpg)
 
 ## Disciplina não escala, guarda-corpo escala
 
@@ -26,6 +30,10 @@ Com o `refund_amount` lá, a saída é esta:
   ✗ Training blocked by the audit (policy: block_on_red).
 ```
 
+Na interface web, o mesmo bloqueio aparece com a evidência e a sugestão, e a decisão é um clique:
+
+![A auditoria bloqueando o treino por causa de refund_amount](img/ui-audit.jpg)
+
 Para saber se a auditoria funciona de verdade, montei um benchmark com um problema plantado por checagem. Resultado: 13 de 13 encontrados, e zero achados num dataset limpo. Esse segundo número importa tanto quanto o primeiro. Auditoria que grita para tudo vira ruído, e ruído a gente aprende a ignorar.
 
 ## Onde entra o SLM (e onde ele não entra)
@@ -37,6 +45,8 @@ Por conta própria, só com o que leu do schema, ele classificou `refund_amount`
 A regra de arquitetura, porém, é rígida: **a estatística decide, o SLM sugere**. O advisor nunca bloqueia treino, nunca altera dados e, por padrão, se recusa a falar com um endpoint que não seja local. Se você tem dado de saúde ou financeiro, nada sai da sua máquina. Um modelo de 4B quantizado alucina de vez em quando; deixar ele bloquear pipeline seria trocar um problema por outro.
 
 ## Por que Rust no sistema e Python no ML
+
+![Rust como a estrutura de aço, Python como o ecossistema vivo, ligados por dados em colunas](img/rust-python.jpg)
 
 A primeira pergunta que eu mesmo me fiz foi "por que não fazer tudo em Rust?". Eu quis. Só que o ecossistema de ML em Rust ainda não tem LightGBM, XGBoost, CatBoost, cleanlab e fairlearn no nível do Python, e reescrever isso seria anos de trabalho para ficar pior.
 
@@ -63,6 +73,8 @@ O ponto é o mesmo do `refund_amount`: métrica perfeita é sintoma, não conqui
 
 ## A máquina mais barata que resolve
 
+![O job escolhe o caminho mais barato entre notebook, GPU na rede e nuvem](img/machines.jpg)
+
 Metade da conta de ML é infraestrutura mal escolhida: GPU alugada para um problema tabular que roda em CPU, ou uma busca de hiperparâmetros que treina tudo até o fim.
 
 O que já funciona hoje:
@@ -77,14 +89,24 @@ tempera machines check gpu-box
 tempera run churn.yaml   # com compute: { allow: [gpu-box] } no spec
 ```
 
+## O vídeo: tudo isso rodando
+
+Gravei a demonstração completa, do terminal à interface web, com o exemplo de churn: a auditoria bloqueando, a coluna descartada, sete candidatos treinando e o relatório no fim.
+
+{{YOUTUBE}}
+
+Um detalhe que aparece no vídeo e vale repetir: quem venceu foi uma regressão logística, não o CatBoost nem o XGBoost. Rodar o baseline e os modelos simples primeiro existe exatamente para isso.
+
+![Job concluído: curva de validação, importância das variáveis e relatório](img/ui-job.jpg)
+
 ## O que ainda não está pronto
 
 Prefiro dizer antes que alguém descubra:
 
-- **GPU barata na nuvem (M6)** ainda não existe. O plano é integrar RunPod e Vast.ai, estimar memória antes de alugar, escolher a menor GPU que cabe, usar spot com checkpoint e ter teto de orçamento. É o próximo marco, porque é o centro da proposta de "barato".
+- **GPU barata na nuvem (M6)** está em preview. Já existem os clientes de RunPod e Vast.ai, o catálogo de preços, a estimativa de custo por máquina, o teto de orçamento que recusa o job antes de alugar e um reaper que derruba instâncias órfãs. Mas os clientes foram escritos a partir da documentação pública das APIs e ainda não rodaram contra uma conta real, e a estimativa de custo ainda não foi calibrada.
 - **Deep learning (M5)**, com visão, NLP e fine-tuning com LoRA, também não começou. Hoje o Têmpera é forte em dados tabulares.
 - O painel de treino ao vivo ainda não mostra custo, uso de GPU nem alertas de overfitting.
 
 ## Experimente e me conte onde quebrou
 
-O código está em [github.com/roanbrasil/tempera](https://github.com/roanbrasil/tempera). Clone, rode `tempera run churn.yaml` na pasta `examples` e veja a auditoria parar o treino antes de você. Depois tente com os seus dados. Se ela deixar passar um leakage que você encontrou na mão, abra uma issue: é exatamente o tipo de caso que quero no benchmark.
+O código está em [github.com/roanbrasil/tempera](https://github.com/roanbrasil/tempera), e a primeira versão, a v0.1.0, tem binários prontos para Linux e macOS na página de [releases](https://github.com/roanbrasil/tempera/releases). Baixe, rode `tempera run churn.yaml` na pasta `examples` e veja a auditoria parar o treino antes de você. Depois tente com os seus dados. Se ela deixar passar um leakage que você encontrou na mão, abra uma issue: é exatamente o tipo de caso que quero no benchmark.
