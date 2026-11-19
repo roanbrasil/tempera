@@ -47,8 +47,8 @@ jobs:
           # Oldest supported runner → oldest glibc → widest Linux compatibility.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: aarch64-apple-darwin, os: macos-14 }
-          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
