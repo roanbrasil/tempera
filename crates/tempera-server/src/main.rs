@@ -9,6 +9,7 @@ mod http;
 mod machines_cli;
 mod orchestrator;
 mod quality;
+mod remote;
 mod ui;
 mod workspace;
 

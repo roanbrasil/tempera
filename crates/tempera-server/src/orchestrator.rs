@@ -321,43 +321,53 @@ async fn train_and_report(
     let worker = worker_dir();
     let python = python_available(worker.as_deref());
 
-    // Bring up the local agent only if something needs it.
+    // Bring up an agent only if something needs it: on this machine, or on the
+    // first SSH machine named in `compute.allow` (see `tempera machines`).
     let needs_agent = cands.iter().any(|c| c.backend != BackendKind::Builtin);
     let hub = Hub::new();
-    let mut agent = None;
+    let mut agent: Option<Agent> = None;
     if needs_agent {
         let (addr, _server) = hub.serve("127.0.0.1:0".parse()?).await?;
-        let exec = LocalExecutor::start(&hub, &format!("http://{addr}"), worker.as_deref()).await?;
-        ui::step(&format!(
-            "Machine   local · {} CPU · {}",
-            exec.hardware.cpu_cores,
-            if exec.hardware.gpus.is_empty() {
-                "no GPU".to_owned()
-            } else {
-                exec.hardware
-                    .gpus
-                    .iter()
-                    .map(|g| g.name.clone())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+        let registry =
+            tempera_exec::machines::MachinesFile::load(&tempera_exec::machines::machines_path(&ws.root))?;
+        let ssh_name = spec
+            .compute
+            .allow
+            .iter()
+            .find(|n| n.as_str() != "local" && registry.get(n).is_some());
+        let started = match ssh_name {
+            Some(name) => {
+                let ssh = registry
+                    .get(name)
+                    .ok_or_else(|| anyhow!("machine `{name}` vanished"))?
+                    .to_ssh()?;
+                // Ship the Python worker only when a candidate needs it (native jobs need no uv).
+                let needs_python = cands.iter().any(|c| c.backend == BackendKind::Python);
+                let opts = tempera_exec::ssh::StartOpts {
+                    worker_dir: if needs_python { worker.clone() } else { None },
+                    ..Default::default()
+                };
+                let session = ssh.start(&hub, addr, &opts).await?;
+                let remote_job_dir = format!("{}/jobs/{job_id}", ssh.remote_root().await?);
+                crate::remote::set(
+                    job_id,
+                    crate::remote::Remote {
+                        ssh,
+                        machine_id: session.machine_id.clone(),
+                        job_dir: job_dir.to_path_buf(),
+                        remote_job_dir,
+                    },
+                );
+                Agent::Ssh(name.clone(), session)
             }
-        ));
-        agent = Some(exec);
+            None => {
+                Agent::Local(LocalExecutor::start(&hub, &format!("http://{addr}"), worker.as_deref()).await?)
+            }
+        };
+        ui::step(&format!("Machine   {}", started.describe()));
+        agent = Some(started);
     }
-    let machine = agent.as_ref().map_or_else(
-        || "local".to_owned(),
-        |a| {
-            format!(
-                "local ({} CPU{})",
-                a.hardware.cpu_cores,
-                if a.hardware.gpus.is_empty() {
-                    ", no GPU"
-                } else {
-                    ""
-                }
-            )
-        },
-    );
+    let machine = agent.as_ref().map_or_else(|| "local".to_owned(), Agent::describe);
 
     ui::step(&format!(
         "Training  {} candidates · ranked by {} on validation",
@@ -497,9 +507,10 @@ async fn train_and_report(
         tempera_audit::add_findings(audit, spec, found);
     }
     tempera_audit::save(ds, audit)?;
-    if let Some(exec) = agent {
-        exec.stop(&hub).await;
+    if let Some(a) = agent {
+        a.stop(&hub).await;
     }
+    crate::remote::remove(job_id);
     if let Some(w) = &winner {
         ui::verdict(w, metric, &summaries);
         events::emit(
@@ -915,7 +926,19 @@ pub(crate) async fn dispatch(
         manifest_json,
         ..Default::default()
     };
-    let mut rx = hub.start(LOCAL_MACHINE, start).await?;
+    // On an SSH machine, inputs go to its cache and outputs come back after the command.
+    let remote = crate::remote::get(job_id);
+    let machine = remote
+        .as_ref()
+        .map_or_else(|| LOCAL_MACHINE.to_owned(), |r| r.machine_id.clone());
+    let mut start = start;
+    let mut plan = None;
+    if let Some(r) = &remote {
+        let mut v: serde_json::Value = serde_json::from_str(&start.manifest_json)?;
+        plan = Some(r.rewrite(&mut v).await?);
+        start.manifest_json = v.to_string();
+    }
+    let mut rx = hub.start(&machine, start).await?;
     let mut points = Vec::new();
     // Backend-computed evaluation metrics (clustering quality, §8), last value wins.
     let mut evals = BTreeMap::new();
@@ -929,7 +952,7 @@ pub(crate) async fn dispatch(
             m = rx.recv() => m,
             () = events::cancelled(job_id), if !cancel_sent => {
                 cancel_sent = true;
-                let _ = hub.cancel(LOCAL_MACHINE, job_id, true).await;
+                let _ = hub.cancel(&machine, job_id, true).await;
                 continue;
             }
         };
@@ -1006,7 +1029,15 @@ pub(crate) async fn dispatch(
                     ui::backend_log(line.level, &line.message);
                 }
             }
-            Some(agent_message::Msg::Finished(f)) => {
+            Some(agent_message::Msg::Finished(mut f)) => {
+                if let (Some(r), Some(p)) = (&remote, &plan) {
+                    r.pull(p).await?;
+                    for a in &mut f.artifacts {
+                        if let Some(rest) = a.uri.strip_prefix(&r.remote_job_dir) {
+                            a.uri = format!("{}{rest}", r.job_dir.display());
+                        }
+                    }
+                }
                 if record {
                     if let Some(pred) = predicted_total {
                         let actual = started.elapsed().as_secs_f64().max(1e-6);
@@ -1214,4 +1245,44 @@ fn new_job_id(name: &str) -> String {
         .to_owned();
     let suffix = (nanos ^ u128::from(std::process::id())) % 0x10000;
     format!("{name}-{stamp}-{suffix:04x}")
+}
+
+/// The agent running this job's runs.
+enum Agent {
+    Local(LocalExecutor),
+    Ssh(String, tempera_exec::ssh::SshSession),
+}
+
+impl Agent {
+    fn hardware(&self) -> &tempera_proto::v1::Hardware {
+        match self {
+            Self::Local(e) => &e.hardware,
+            Self::Ssh(_, s) => &s.hardware,
+        }
+    }
+
+    fn describe(&self) -> String {
+        let hw = self.hardware();
+        let gpus = if hw.gpus.is_empty() {
+            "no GPU".to_owned()
+        } else {
+            hw.gpus
+                .iter()
+                .map(|g| g.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let name = match self {
+            Self::Local(_) => "local".to_owned(),
+            Self::Ssh(n, _) => format!("{n} (ssh)"),
+        };
+        format!("{name} · {} CPU · {gpus}", hw.cpu_cores)
+    }
+
+    async fn stop(self, hub: &Hub) {
+        match self {
+            Self::Local(e) => e.stop(hub).await,
+            Self::Ssh(_, s) => s.stop(hub).await,
+        }
+    }
 }
