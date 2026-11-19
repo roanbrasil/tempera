@@ -23,7 +23,7 @@ Têmpera is an ML model training platform that takes you from a raw data file to
 - 📈 **Tracks:** live metrics, ETA, and estimated vs. actual cost.
 - 📦 **Delivers:** an evaluated model, a report, and an artifact (ONNX/safetensors) ready to serve.
 
-> Status: **M1 done; M2–M4 mostly done.** Web UI with live training, 26 algorithms (tabular
+> Status: **M1 done; M2–M4 mostly done.** Web UI with live training, 22 algorithms + 2 baselines (tabular
 > supervised, clustering, anomaly detection), budget-aware hyperparameter search, a 13-check data audit
 > plus a local SLM advisor, and jobs on your own machines over SSH. Cloud GPUs (M6) and deep learning
 > (M5) are next. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
