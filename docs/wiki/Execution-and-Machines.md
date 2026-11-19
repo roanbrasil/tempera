@@ -21,7 +21,7 @@ Implementations:
 | Executor | Provisioning | Agent bootstrap | Release |
 |---|---|---|---|
 | `LocalExecutor` | None | Starts the agent as a child process | Kills the process |
-| `SshExecutor` | None (existing machine) | `scp` of the binary (checks hash/version) + `ssh` to start it; reverse tunnel to the server | Stops the agent |
+| `SshMachine` (SSH) | None (existing machine) | Streams the binary over the system `ssh` only when its sha256 differs, then starts it through `ssh -R` (reverse tunnel to the hub) | `Shutdown` to the agent, then the `ssh` process ends |
 | `CloudExecutor<P: Provider>` | Provider API (creates the pod/instance) | Base image with the agent preinstalled **or** cloud-init | API: destroys the instance |
 
 ## The agent (`tempera-agent`)
@@ -44,21 +44,79 @@ Responsibilities:
 
 ## Machines on the local network (SSH)
 
-Registration:
+Têmpera drives the **system OpenSSH client** (`ssh`), not an embedded SSH library
+([ADR-0007](../adr/0007-ssh-via-openssh.md)). Whatever works with `ssh host` works here:
+`~/.ssh/config` aliases, `ProxyJump`, `ssh-agent`, hardware keys and `known_hosts`.
+Every call adds `-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15`, so
+nothing ever prompts. Host key checking is never disabled: connect once with plain `ssh`
+to accept a new machine's key.
+
+### Registration
+
+`<TEMPERA_HOME>/machines.yaml` (managed by `tempera machines`, editable by hand):
 
 ```yaml
 machines:
-  - name: living-room-pc
+  - name: living-room-pc        # also the agent's machine id
     kind: ssh
-    host: 192.168.0.42
+    host: 192.168.0.42          # or a ~/.ssh/config alias
     user: bruno
-    key: ~/.ssh/id_ed25519      # or the ssh-agent
+    port: 22                    # optional
+    identity: ~/.ssh/id_ed25519 # optional (`key` also accepted); ssh-agent/config otherwise
+    remote_dir: ~/.tempera-agent  # optional, this is the default
     tags: [gpu, rtx3090]
 ```
 
-- **Optional discovery** via mDNS: already-installed agents announce themselves on the LAN.
-- Health checks and inventory are done at registration.
-- Host prerequisites: Linux or macOS, plus the NVIDIA driver if there is a GPU. Python and Docker are **not** required: `uv` is downloaded on demand.
+```text
+tempera machines add living-room-pc --host 192.168.0.42 --user bruno [--port P] [--identity F] [--tag gpu]
+tempera machines list
+tempera machines check living-room-pc [--worker-dir workers/python] [--install-uv]
+tempera machines remove living-room-pc
+```
+
+`check` is a real round trip: inventory over `ssh`, agent install, agent started through
+the tunnel against a temporary local hub, the `Register` hardware printed, agent stopped.
+
+### What happens on the machine
+
+Everything lives under `remote_dir` (default `~/.tempera-agent`):
+
+| Path | Content |
+|---|---|
+| `bin/tempera-agent` | Uploaded only when the sha256 differs; verified remotely, then moved into place atomically |
+| `cache/<sha256>.<ext>` | Content-addressed data cache: a second job with the same file transfers nothing |
+| `workers/<name>/` | Synced Python worker project (`.venv`, `__pycache__`, `.pytest_cache` excluded; the remote `.venv` is kept so uv stays warm). Skipped when the content hash is unchanged |
+| `runs/...` | Suggested place for run work dirs (the orchestrator chooses) |
+
+The library API is `tempera_exec::SshMachine`:
+
+| Method | Does |
+|---|---|
+| `check()` | OS, arch, libc, `uv`/`python3`, free disk, installed agent version (`RemoteInfo`) |
+| `install_agent(local)` | Hash-checked upload; refuses a binary built for another OS/arch |
+| `sync_worker(local_dir)` | `tar` over `ssh` with excludes, skipped when unchanged |
+| `put(local)` / `put_cached(local)` | Upload into the data cache, returns the remote path (and whether it was uploaded) |
+| `get(remote, local)` | Downloads a file, or a directory recursively |
+| `exec(cmd)` | Runs a shell command (`sh -c`) and returns stdout |
+| `start(hub, hub_addr, opts)` | All of the above, then `ssh -R 127.0.0.1:<port>:<hub>` running `tempera-agent connect --server http://127.0.0.1:<port> --machine-id <name> [--worker-dir ...]`; returns once the agent registered |
+
+- **Tunnel:** the remote port is random in 20000..60000 and retried when busy
+  (`ExitOnForwardFailure=yes`). The agent dials the hub through the SSH connection, so no
+  port is opened on either side. If the connection drops, the agent's stream breaks and it
+  exits; running jobs fail as retryable.
+- **Python:** the agent runs Python backends with `uv run --project <remote worker dir>`.
+  If `uv` is missing, `check()` reports it (`RemoteInfo::python_ready`) and `start()` with a
+  worker dir fails clearly, unless `install_uv` is set: then uv is installed user-locally
+  (`~/.local/bin`) with the official installer. The native backend needs nothing.
+- **Running a job remotely:** `put()` the model-ready Parquet files, write the manifest
+  with those remote paths and a remote `work_dir`, send `StartJob` to the machine id, then
+  `get()` the work dir (model, predictions) back.
+- **Optional discovery** via mDNS (#43): later.
+- Host prerequisites: Linux or macOS with `sh`, `tar`, `sha256sum` or `shasum`, and sshd
+  with `AllowTcpForwarding yes` (the default), plus the NVIDIA driver if there is a GPU.
+  Python and Docker are **not** required: `uv` is downloaded on demand. The agent binary
+  must match the machine's OS/arch (a glibc build runs on hosts with an equal or newer
+  glibc; static musl builds come with #38).
 - Windows: support via WSL2 (later phase).
 
 ## Cloud (GPU via API key)

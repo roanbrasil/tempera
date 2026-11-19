@@ -6,7 +6,9 @@ mod draft;
 mod events;
 mod hpo;
 mod http;
+mod machines_cli;
 mod orchestrator;
+mod quality;
 mod ui;
 mod workspace;
 
@@ -81,6 +83,11 @@ enum Command {
     },
     /// Print the JSON Schema of tempera.yaml.
     Schema,
+    /// Manage worker machines reachable over SSH (<TEMPERA_HOME>/machines.yaml).
+    Machines {
+        #[command(subcommand)]
+        action: machines_cli::MachinesCmd,
+    },
 }
 
 fn main() {
@@ -123,6 +130,7 @@ async fn dispatch(cmd: Command) -> anyhow::Result<i32> {
             }
         }
         Command::Schema => print!("{}", tempera_core::schema::job_spec_schema()),
+        Command::Machines { action } => return machines_cli::run(&ws.root, action).await,
         Command::Up { host, port } => {
             let addr: std::net::SocketAddr = format!("{host}:{port}")
                 .parse()
