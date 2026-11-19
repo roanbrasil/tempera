@@ -80,7 +80,23 @@ pub fn prepare(ws: &Workspace, spec: JobSpec) -> anyhow::Result<Prepared> {
     for r in &inference.reasons {
         ui::detail(r);
     }
-    let audit = tempera_audit::audit(&ds, &spec, &profile, &inference)?;
+    let mut audit = tempera_audit::audit(&ds, &spec, &profile, &inference)?;
+    // The local SLM advisor suggests; it never blocks (ADR-0004).
+    match tempera_audit::advisor::advise(&spec.audit.advisor, &profile, spec.data.target.as_deref()) {
+        tempera_audit::advisor::AdvisorResult::Advice { model, columns } => {
+            // Columns already flagged or not used need no extra advice.
+            let flagged: Vec<&str> = audit
+                .findings
+                .iter()
+                .filter_map(|f| f.column.as_deref())
+                .chain(audit.plan.dropped.keys().map(String::as_str))
+                .collect();
+            let extra = tempera_audit::advisor::findings(&columns, &profile, &flagged, &spec.data.sensitive);
+            ui::detail(&format!("Advisor ({model}): {} suggestion(s)", extra.len()));
+            tempera_audit::add_findings(&mut audit, &spec, extra);
+        }
+        tempera_audit::advisor::AdvisorResult::Skipped(why) => ui::detail(&format!("Advisor skipped: {why}")),
+    }
     tempera_audit::save(&ds, &audit)?;
     Ok(Prepared {
         spec,

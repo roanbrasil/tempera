@@ -3,6 +3,7 @@
 //! explains. See docs/wiki/Data-Audit.md and ADR-0004.
 
 pub mod advanced;
+pub mod advisor;
 pub mod privacy;
 
 use std::collections::{BTreeMap, HashMap};

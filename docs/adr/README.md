@@ -8,5 +8,6 @@
 | [0004](0004-slm-advisor.md) | SLM as advisor, statistics as decision-maker | Accepted |
 | [0005](0005-persistence.md) | SQLite + local FS first, behind traits | Accepted |
 | [0006](0006-ui-sveltekit.md) | Static SvelteKit UI embedded in the binary | Accepted |
+| [0008](0008-slm-via-local-endpoint.md) | The SLM advisor talks to a local OpenAI-compatible endpoint | Accepted |
 
 New ADR: copy the [template](template.md) with the next number.

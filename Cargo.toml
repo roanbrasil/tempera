@@ -67,6 +67,14 @@ all = { level = "warn", priority = -1 }
 unwrap_used = "warn"
 expect_used = "warn"
 
+[profile.dev]
+# Line tables keep backtraces useful; full debug info for Polars/linfa test
+# binaries filled tens of GB.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

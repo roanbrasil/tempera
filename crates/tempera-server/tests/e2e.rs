@@ -38,6 +38,7 @@ fn tempera(home: &Path, args: &[&str]) -> std::process::Output {
         .env("TEMPERA_AGENT_BIN", agent_bin())
         .env("TEMPERA_NUM_THREADS", "2")
         .env("NO_COLOR", "1")
+        .env("TEMPERA_ADVISOR", "off")
         .output()
         .unwrap()
 }
