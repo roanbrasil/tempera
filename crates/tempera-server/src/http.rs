@@ -20,7 +20,8 @@ use crate::workspace::Workspace;
 use crate::{candidates, draft, orchestrator};
 
 #[derive(rust_embed::Embed)]
-#[folder = "$CARGO_MANIFEST_DIR/../../ui/build"]
+// Relative to this crate's Cargo.toml (`$VAR` interpolation needs an extra rust-embed feature).
+#[folder = "../../ui/build"]
 #[allow_missing = true]
 struct UiAssets;
 
