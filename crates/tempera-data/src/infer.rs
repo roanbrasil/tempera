@@ -27,11 +27,28 @@ pub struct TaskInference {
 pub fn infer_task(spec: &JobSpec, profile: &Profile) -> Result<TaskInference> {
     let Some(target) = &spec.data.target else {
         let task = spec.task.kind.unwrap_or(TaskType::Clustering);
-        let metric = spec.task.metric.unwrap_or(Metric::Silhouette);
+        let default_metric = if task == TaskType::AnomalyDetection {
+            Metric::PrAuc
+        } else {
+            Metric::Silhouette
+        };
+        let metric = spec.task.metric.unwrap_or(default_metric);
+        let mut reasons = vec![format!(
+            "No target column → unsupervised task `{}`.",
+            snake(&task)
+        )];
+        if task == TaskType::Clustering {
+            reasons
+                .push("Candidates are ranked by silhouette (cohesion vs separation of clusters).".to_owned());
+        } else if task == TaskType::AnomalyDetection {
+            reasons.push(
+                "Without labels there is nothing to rank: one detector runs and flags outliers.".to_owned(),
+            );
+        }
         return Ok(TaskInference {
             task,
             metric,
-            reasons: vec!["No target column: unsupervised task.".to_owned()],
+            reasons,
             minority_share: None,
         });
     };

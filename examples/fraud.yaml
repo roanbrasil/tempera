@@ -1,0 +1,9 @@
+# Anomaly detection. `is_fraud` is used ONLY to evaluate the detector, never to train it.
+version: 1
+name: card-fraud
+data:
+  source: ./data/transactions.csv
+  target: is_fraud
+task:
+  type: anomaly_detection
+  metric: pr_auc

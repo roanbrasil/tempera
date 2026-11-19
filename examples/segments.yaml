@@ -1,0 +1,5 @@
+# Clustering: no target. Candidates are ranked by silhouette.
+version: 1
+name: customer-segments
+data:
+  source: ./data/segments.csv

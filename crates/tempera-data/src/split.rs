@@ -99,19 +99,20 @@ impl Split {
     }
 }
 
+/// Whether the target holds class labels (classification, or anomaly detection with labels).
+fn labeled(spec: &JobSpec, task: TaskType) -> bool {
+    matches!(
+        task,
+        TaskType::BinaryClassification | TaskType::MulticlassClassification
+    ) || (task == TaskType::AnomalyDetection && spec.data.target.is_some())
+}
+
 /// Resolves `auto` to a concrete strategy.
 pub fn resolve_strategy(spec: &JobSpec, task: TaskType) -> SplitStrategy {
     match spec.split.strategy {
         SplitStrategy::Auto if spec.data.time_column.is_some() => SplitStrategy::Temporal,
         SplitStrategy::Auto if spec.data.group_column.is_some() => SplitStrategy::Group,
-        SplitStrategy::Auto
-            if matches!(
-                task,
-                TaskType::BinaryClassification | TaskType::MulticlassClassification
-            ) =>
-        {
-            SplitStrategy::Stratified
-        }
+        SplitStrategy::Auto if labeled(spec, task) => SplitStrategy::Stratified,
         SplitStrategy::Auto => SplitStrategy::Random,
         s => s,
     }
@@ -119,11 +120,11 @@ pub fn resolve_strategy(spec: &JobSpec, task: TaskType) -> SplitStrategy {
 
 /// Builds the model-ready splits for `ds` (cached by content).
 pub fn make_split(ds: &Dataset, spec: &JobSpec, task: TaskType, plan: &FeaturePlan) -> Result<Split> {
-    let target = spec
-        .data
-        .target
-        .clone()
-        .ok_or_else(|| DataError::Invalid("a target column is required to split".into()))?;
+    // Unsupervised tasks may have no target; anomaly detection may carry labels for evaluation.
+    let target = spec.data.target.clone();
+    if target.is_none() && task.is_supervised() {
+        return Err(DataError::Invalid("a target column is required to split".into()));
+    }
     let strategy = resolve_strategy(spec, task);
     let id = split_id(ds, spec, task, plan, strategy)?;
     let dir = ds.dir.join("splits").join(&id);
@@ -134,21 +135,20 @@ pub fn make_split(ds: &Dataset, spec: &JobSpec, task: TaskType, plan: &FeaturePl
         return Ok(s);
     }
 
-    let classification = matches!(
-        task,
-        TaskType::BinaryClassification | TaskType::MulticlassClassification
-    );
+    let classification = labeled(spec, task);
     let mut df = model_ready(
         scan_parquet(&ds.data_path())?,
         spec,
-        &target,
+        target.as_deref(),
         plan,
         classification,
     )?
     .collect()?;
 
     let before = df.height();
-    df = df.filter(&df.column(TARGET)?.is_not_null())?;
+    if target.is_some() {
+        df = df.filter(&df.column(TARGET)?.is_not_null())?;
+    }
     let dropped_null_target = (before - df.height()) as u64;
 
     let before = df.height();
@@ -190,7 +190,8 @@ pub fn make_split(ds: &Dataset, spec: &JobSpec, task: TaskType, plan: &FeaturePl
     } else {
         Vec::new()
     };
-    let positive_class = (task == TaskType::BinaryClassification)
+    let positive_class = (task == TaskType::BinaryClassification
+        || (classification && task == TaskType::AnomalyDetection))
         .then(|| positive_class(&classes, df.column(TARGET)))
         .flatten();
     let features = final_features(&df);
@@ -222,14 +223,16 @@ pub fn make_split(ds: &Dataset, spec: &JobSpec, task: TaskType, plan: &FeaturePl
 fn model_ready(
     lf: LazyFrame,
     spec: &JobSpec,
-    target: &str,
+    target: Option<&str>,
     plan: &FeaturePlan,
     classification: bool,
 ) -> Result<LazyFrame> {
     let schema = lf.clone().collect_schema()?;
     let has = |c: &str| schema.get(c).is_some();
-    if !has(target) {
-        return Err(DataError::MissingColumn(target.to_owned()));
+    if let Some(t) = target
+        && !has(t)
+    {
+        return Err(DataError::MissingColumn(t.to_owned()));
     }
     let mut exprs = Vec::new();
     for f in &plan.features {
@@ -273,15 +276,17 @@ fn model_ready(
             exprs.push(c.dt().hour().cast(DataType::Float64).alias(format!("{d}__hour")));
         }
     }
-    let t = col(target);
-    exprs.push(
-        if classification {
-            label_expr(t, schema.get(target))
-        } else {
-            t.cast(DataType::Float64)
-        }
-        .alias(TARGET),
-    );
+    if let Some(target) = target {
+        let t = col(target);
+        exprs.push(
+            if classification {
+                label_expr(t, schema.get(target))
+            } else {
+                t.cast(DataType::Float64)
+            }
+            .alias(TARGET),
+        );
+    }
     if let Some(g) = &spec.data.group_column {
         if !has(g) {
             return Err(DataError::MissingColumn(g.clone()));
@@ -451,7 +456,9 @@ fn label_counts(c: &Column) -> Result<BTreeMap<String, u64>> {
 
 /// Picks the positive class: conventional names first, otherwise the minority.
 fn positive_class(classes: &[String], target: PolarsResult<&Column>) -> Option<String> {
-    const POSITIVE: [&str; 6] = ["1", "true", "yes", "y", "positive", "pos"];
+    const POSITIVE: [&str; 9] = [
+        "1", "true", "yes", "y", "positive", "pos", "anomaly", "outlier", "fraud",
+    ];
     for p in POSITIVE {
         if let Some(c) = classes.iter().find(|c| c.eq_ignore_ascii_case(p)) {
             return Some(c.clone());
@@ -654,6 +661,26 @@ mod tests {
         let c = make_split(&ds, &other, TaskType::BinaryClassification, &plan()).unwrap();
         assert_ne!(a.id, c.id);
         assert_ne!(read(&a.path(Partition::Test)), read(&c.path(Partition::Test)));
+    }
+
+    #[test]
+    fn unsupervised_split_without_target() {
+        let (_t, ds) = dataset(300);
+        let spec = JobSpec::from_yaml("version: 1\nname: t\ndata: { source: d.csv }\n").unwrap();
+        let s = make_split(&ds, &spec, TaskType::Clustering, &plan()).unwrap();
+        assert_eq!(s.strategy, SplitStrategy::Random);
+        assert!(s.classes.is_empty());
+        let train = read(&s.path(Partition::Train));
+        assert!(train.column(TARGET).is_err());
+        assert_eq!(s.rows.values().sum::<u64>(), 302); // 300 + null-target row + 1 duplicate removed
+    }
+
+    #[test]
+    fn anomaly_split_keeps_labels_for_evaluation() {
+        let (_t, ds) = dataset(500);
+        let s = make_split(&ds, &spec(""), TaskType::AnomalyDetection, &plan()).unwrap();
+        assert_eq!(s.strategy, SplitStrategy::Stratified);
+        assert_eq!(s.positive_class.as_deref(), Some("yes"));
     }
 
     #[test]

@@ -59,8 +59,24 @@ pub fn evaluate(
     truth: &Path,
     predictions: &Path,
 ) -> Result<Evaluation> {
-    let t = scan_parquet(truth)?.select([col(TARGET)]).collect()?;
+    let truth_lf = scan_parquet(truth)?;
+    let has_target = truth_lf.clone().collect_schema()?.get(TARGET).is_some();
+    let t = if has_target {
+        truth_lf.select([col(TARGET)]).collect()?
+    } else {
+        truth_lf.select([len().alias("__rows__")]).collect()?
+    };
     let p = scan_parquet(predictions)?.collect()?;
+    if !has_target {
+        // Unsupervised without labels: only prediction-derived statistics.
+        return match task {
+            TaskType::Clustering => clustering(&p),
+            TaskType::AnomalyDetection => anomaly(None, &p, positive_class),
+            other => Err(DataError::Invalid(format!(
+                "{other:?} needs `{TARGET}` to be evaluated"
+            ))),
+        };
+    }
     if t.height() != p.height() {
         return Err(DataError::Invalid(format!(
             "predictions have {} rows but the truth has {}",
@@ -77,6 +93,8 @@ pub fn evaluate(
             task == TaskType::BinaryClassification,
         ),
         TaskType::Regression => regression(&t, &p),
+        TaskType::Clustering => clustering(&p),
+        TaskType::AnomalyDetection => anomaly(Some(&t), &p, positive_class),
         other => Err(DataError::Invalid(format!(
             "evaluation of {other:?} is not supported yet"
         ))),
@@ -163,6 +181,82 @@ fn classification(
     })
 }
 
+/// Cluster counts from the `cluster` column. Quality metrics that depend on the
+/// model's feature space (silhouette, Davies-Bouldin) come from the backend (§8).
+fn clustering(p: &DataFrame) -> Result<Evaluation> {
+    let c: Vec<i64> = p
+        .column("cluster")?
+        .cast(&DataType::Int64)?
+        .i64()?
+        .iter()
+        .map(|v| v.unwrap_or(-1))
+        .collect();
+    let n = c.len().max(1) as f64;
+    let noise = c.iter().filter(|&&k| k < 0).count() as f64;
+    let distinct: std::collections::BTreeSet<i64> = c.iter().copied().filter(|&k| k >= 0).collect();
+    let mut metrics = BTreeMap::new();
+    metrics.insert("n_clusters".into(), distinct.len() as f64);
+    metrics.insert("noise_fraction".into(), noise / n);
+    Ok(Evaluation {
+        rows: c.len() as u64,
+        metrics,
+        confusion: Vec::new(),
+        classes: Vec::new(),
+        roc: Vec::new(),
+        pr: Vec::new(),
+        residuals: Vec::new(),
+    })
+}
+
+/// Anomaly detection: ranking quality of `anomaly_score` when labels exist.
+fn anomaly(t: Option<&DataFrame>, p: &DataFrame, positive: Option<&str>) -> Result<Evaluation> {
+    let score: Vec<f64> = p
+        .column("anomaly_score")?
+        .cast(&DataType::Float64)?
+        .f64()?
+        .iter()
+        .map(|v| v.unwrap_or(f64::NAN))
+        .collect();
+    let flagged = p
+        .column("prediction")
+        .ok()
+        .and_then(|c| c.cast(&DataType::String).ok())
+        .map(|c| {
+            c.str()
+                .map(|s| s.iter().filter(|v| *v == Some("anomaly")).count())
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    let mut metrics = BTreeMap::new();
+    metrics.insert(
+        "flagged_fraction".into(),
+        flagged as f64 / score.len().max(1) as f64,
+    );
+    let (mut roc, mut pr) = (Vec::new(), Vec::new());
+    if let (Some(t), Some(pos)) = (t, positive) {
+        let y: Vec<bool> = t
+            .column(TARGET)?
+            .cast(&DataType::String)?
+            .str()?
+            .iter()
+            .map(|v| v == Some(pos))
+            .collect();
+        metrics.insert("roc_auc".into(), m::roc_auc(&y, &score));
+        metrics.insert("pr_auc".into(), m::pr_auc(&y, &score));
+        roc = m::roc_curve(&y, &score, CURVE_POINTS);
+        pr = m::pr_curve(&y, &score, CURVE_POINTS);
+    }
+    Ok(Evaluation {
+        rows: score.len() as u64,
+        metrics,
+        confusion: Vec::new(),
+        classes: Vec::new(),
+        roc,
+        pr,
+        residuals: Vec::new(),
+    })
+}
+
 fn regression(t: &DataFrame, p: &DataFrame) -> Result<Evaluation> {
     let y: Vec<f64> = t
         .column(TARGET)?
@@ -240,6 +334,43 @@ mod tests {
         assert!((e.get(Metric::Accuracy).unwrap() - 0.5).abs() < 1e-12);
         assert_eq!(e.confusion, vec![vec![1, 1], vec![1, 1]]);
         assert!(!e.roc.is_empty());
+    }
+
+    #[test]
+    fn unsupervised_evaluation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let truth = write(tmp.path(), "t.parquet", df!("x" => [1.0, 2.0, 3.0, 4.0]).unwrap());
+        let pred = write(
+            tmp.path(),
+            "p.parquet",
+            df!("cluster" => [0i64, 0, 1, -1]).unwrap(),
+        );
+        let e = evaluate(TaskType::Clustering, &[], None, &truth, &pred).unwrap();
+        assert_eq!(e.metrics["n_clusters"], 2.0);
+        assert!((e.metrics["noise_fraction"] - 0.25).abs() < 1e-12);
+
+        let labeled = write(
+            tmp.path(),
+            "l.parquet",
+            df!(TARGET => ["normal", "normal", "anomaly", "normal"]).unwrap(),
+        );
+        let scores = write(
+            tmp.path(),
+            "s.parquet",
+            df!("anomaly_score" => [0.1, 0.2, 0.9, 0.3], "prediction" => ["normal", "normal", "anomaly", "normal"]).unwrap(),
+        );
+        let e = evaluate(
+            TaskType::AnomalyDetection,
+            &[],
+            Some("anomaly"),
+            &labeled,
+            &scores,
+        )
+        .unwrap();
+        assert!((e.get(Metric::RocAuc).unwrap() - 1.0).abs() < 1e-12);
+        assert!((e.metrics["flagged_fraction"] - 0.25).abs() < 1e-12);
+        let e = evaluate(TaskType::AnomalyDetection, &[], None, &truth, &scores).unwrap();
+        assert!(e.get(Metric::RocAuc).is_none());
     }
 
     #[test]

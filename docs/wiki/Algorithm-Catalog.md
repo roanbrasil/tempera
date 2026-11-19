@@ -4,31 +4,56 @@ Each algorithm has **one preferred backend** and, when available, an **alternati
 
 Backend legend: 🦀 native Rust (`tempera-native`) · 🐍 Python (`tempera_worker`)
 
-## Tabular: supervised
+## Available today
 
-| Algorithm | Task | Preferred | Alternative | Milestone |
-|---|---|---|---|---|
-| Linear regression / Ridge / Lasso | Regression | 🦀 linfa | 🐍 sklearn | M1 |
-| Logistic regression | Classification | 🦀 linfa | 🐍 sklearn | M1 |
-| Decision tree | Both | 🦀 linfa | 🐍 sklearn | M1 |
-| Random Forest | Both | 🐍 sklearn | 🦀 smartcore | M1 |
-| **LightGBM** | Both | 🐍 lightgbm | 🦀 perpetual | M1 |
-| XGBoost | Both | 🐍 xgboost | — | M1 |
-| CatBoost | Both (categorical) | 🐍 catboost | — | M2 |
-| kNN | Both | 🦀 linfa | 🐍 sklearn | M2 |
-| SVM | Classification | 🦀 linfa | 🐍 sklearn | M2 |
-| Tabular MLP | Both | 🦀 Burn | 🐍 PyTorch | M5 |
+Use the key in `strategy.candidates`, prefix with `native:`/`python:` to force a backend, or write
+`candidates: [all]` to try every algorithm that supports the task. `auto` runs a curated ladder (below).
 
-**Default tabular baseline:** a trivial model (majority class or mean), followed by a linear/logistic regression, followed by LightGBM. In practice, GBMs are usually hard to beat on tabular data, and they run on CPU.
+### Tabular: supervised
 
-## Tabular: unsupervised
+| Key | Classification | Regression | Backend | ONNX | In `auto` |
+|---|---|---|---|---|---|
+| `majority` / `mean` | ✓ / — | — / ✓ | builtin (trivial baseline) | — | always |
+| `logistic_regression` | ✓ | | 🦀 linfa (🐍 sklearn with `python:`) | 🐍 | ✓ |
+| `linear_regression` | | ✓ | 🦀 linfa (🐍 sklearn) | 🐍 | ✓ |
+| `ridge` | | ✓ | 🦀 linfa (🐍 sklearn) | 🐍 | ✓ |
+| `decision_tree` | ✓ | | 🦀 linfa | — | ✓ |
+| `lasso`, `elastic_net` | | ✓ | 🐍 sklearn | 🐍 | |
+| `sgd` | ✓ | ✓ | 🐍 sklearn | 🐍 | |
+| `random_forest` | ✓ | ✓ | 🐍 sklearn | 🐍 | ✓ |
+| `extra_trees` | ✓ | ✓ | 🐍 sklearn | 🐍 | |
+| `hist_gradient_boosting` | ✓ | ✓ | 🐍 sklearn | best effort | |
+| `adaboost` | ✓ | ✓ | 🐍 sklearn | best effort | |
+| **`lightgbm`** | ✓ | ✓ | 🐍 lightgbm | 🐍 | ✓ |
+| `xgboost` | ✓ | ✓ | 🐍 xgboost | numeric features only | ✓ |
+| `catboost` | ✓ | ✓ | 🐍 catboost (native categoricals) | best effort | ✓ |
+| `knn` | ✓ | ✓ | 🐍 sklearn | 🐍 | |
+| `svm` | ✓ | ✓ | 🐍 sklearn (subsamples above 20k rows) | 🐍 | |
+| `naive_bayes` | ✓ | | 🐍 sklearn | 🐍 | |
+| `mlp` | ✓ | ✓ | 🐍 sklearn | 🐍 | |
 
-| Algorithm | Preferred | Milestone |
+"best effort": exported when the converter supports the fitted model, otherwise a warning and the
+native format only. Every ONNX export is checked against the native model (relative tolerance 1e-5).
+
+### Tabular: unsupervised (contract: [Contracts §8](Contracts.md))
+
+| Key | Task | Backend | Ranked by |
+|---|---|---|---|
+| `kmeans` | clustering (k chosen by silhouette in 2..10 unless `n_clusters`) | 🐍 sklearn | silhouette |
+| `pca_kmeans` | clustering after PCA (95% variance) | 🐍 sklearn | silhouette |
+| `dbscan` | clustering with noise (`-1`) | 🐍 sklearn | silhouette |
+| `isolation_forest` | anomaly detection | 🐍 sklearn | PR-AUC when labels exist, otherwise unranked |
+
+A clustering job has no `data.target`. An anomaly-detection job may have one: it is used **only** to
+evaluate the detector.
+
+### Planned
+
+| Algorithm | Backend | Milestone |
 |---|---|---|
-| k-means | 🦀 linfa | M2 |
-| DBSCAN | 🦀 linfa | M2 |
-| PCA | 🦀 linfa | M2 |
-| Isolation Forest (anomalies) | 🐍 sklearn | M2 |
+| Native k-means / DBSCAN / PCA | 🦀 linfa | M2 |
+| Native GBM fallback | 🦀 perpetual | M2 |
+| Tabular MLP on GPU | 🦀 Burn / 🐍 PyTorch | M5 |
 
 ## Time series
 

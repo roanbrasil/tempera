@@ -122,7 +122,10 @@ impl Metric {
         use Metric::*;
         use TaskType::*;
         match self {
-            RocAuc | PrAuc => matches!(task, BinaryClassification | MulticlassClassification),
+            RocAuc | PrAuc => matches!(
+                task,
+                BinaryClassification | MulticlassClassification | AnomalyDetection
+            ),
             F1 | BalancedAccuracy | Accuracy | LogLoss => matches!(
                 task,
                 BinaryClassification | MulticlassClassification | ImageClassification | TextClassification

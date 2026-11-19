@@ -2,6 +2,9 @@
 
     python3 examples/data/generate.py
 
+segments.csv has no label (clustering); transactions.csv has a fraud label used only to evaluate the
+anomaly detector, never to train it.
+
 churn.csv contains a *planted leak* (`refund_amount` only exists after a customer churned)
 so you can watch the audit catch it.
 """
@@ -65,6 +68,54 @@ def houses(n: int = 2000) -> None:
     write("houses.csv", rows)
 
 
+def segments(n: int = 1500) -> None:
+    """Customers from 3 behavioral segments (no label): for clustering."""
+    rng = random.Random(23)
+    centers = {
+        "bargain": (25, 2, 0.8),  # avg ticket, visits/month, discount usage
+        "loyal": (60, 8, 0.2),
+        "premium": (220, 3, 0.05),
+    }
+    rows = []
+    for i in range(n):
+        seg = list(centers)[i % 3]
+        ticket, visits, disc = centers[seg]
+        rows.append({
+            "avg_ticket": round(max(5, rng.gauss(ticket, ticket * 0.15)), 2),
+            "visits_per_month": max(0, round(rng.gauss(visits, 1.2), 1)),
+            "discount_share": round(min(1, max(0, rng.gauss(disc, 0.07))), 3),
+            "channel": rng.choice(["app", "web"] if seg != "bargain" else ["app", "web", "store"]),
+        })
+    write("segments.csv", rows)
+
+
+def transactions(n: int = 4000) -> None:
+    """Card transactions with ~1.5% planted fraud; the label is for evaluation only."""
+    rng = random.Random(31)
+    rows = []
+    for _ in range(n):
+        fraud = rng.random() < 0.015
+        if fraud:
+            amount = round(rng.uniform(800, 5000), 2)
+            hour = rng.choice([1, 2, 3, 4])
+            km = round(rng.uniform(300, 4000), 1)
+            tries = rng.randint(2, 6)
+        else:
+            amount = round(math.exp(rng.gauss(3.5, 0.8)), 2)
+            hour = int(min(23, max(0, rng.gauss(14, 4))))
+            km = round(abs(rng.gauss(5, 8)), 1)
+            tries = 1 if rng.random() < 0.97 else 2
+        rows.append({
+            "amount": amount,
+            "hour": hour,
+            "km_from_home": km,
+            "attempts": tries,
+            "merchant": rng.choice(["grocery", "fuel", "online", "travel", "restaurant"]),
+            "is_fraud": "fraud" if fraud else "normal",
+        })
+    write("transactions.csv", rows)
+
+
 def write(name: str, rows: list[dict]) -> None:
     with (HERE / name).open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
@@ -76,3 +127,5 @@ def write(name: str, rows: list[dict]) -> None:
 if __name__ == "__main__":
     churn()
     houses()
+    segments()
+    transactions()
