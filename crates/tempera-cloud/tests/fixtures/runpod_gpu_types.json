@@ -1,0 +1,5 @@
+{"data":{"gpuTypes":[
+ {"id":"NVIDIA GeForce RTX 4090","displayName":"RTX 4090","memoryInGb":24,"securePrice":0.69,"communityPrice":0.34,"secureSpotPrice":null,"communitySpotPrice":0.2},
+ {"id":"NVIDIA A100 80GB PCIe","displayName":"A100 PCIe","memoryInGb":80,"securePrice":1.64,"communityPrice":null,"secureSpotPrice":0.82,"communitySpotPrice":0},
+ {"id":"unknown","displayName":"No prices","memoryInGb":16,"securePrice":null,"communityPrice":null,"secureSpotPrice":null,"communitySpotPrice":null}
+]}}

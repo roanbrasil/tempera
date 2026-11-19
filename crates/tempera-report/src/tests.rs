@@ -241,6 +241,8 @@ pub fn binary_fixture() -> ReportData {
             wall_time_s: 431.7,
             machine: "local (8 CPU, no GPU)".into(),
             cost_usd: 0.0,
+            estimated_cost_usd: None,
+            savings: None,
         },
         spec_yaml: spec_yaml(),
         reproduce_command: "tempera run tempera.yaml --seed 42".into(),

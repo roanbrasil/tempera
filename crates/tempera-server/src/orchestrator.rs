@@ -144,7 +144,26 @@ pub async fn run_spec(
     spec_label: &str,
     job_id: Option<String>,
 ) -> anyhow::Result<JobOutcome> {
-    let job_id = job_id.unwrap_or_else(|| new_job_id(&spec.name));
+    let job_id = match job_id {
+        Some(id) => id,
+        None => {
+            // CLI: register the job so budget caps, preemption and Ctrl-C can
+            // cancel it cleanly (a rented instance is then terminated, not orphaned).
+            let id = new_job_id(&spec.name);
+            events::register(&id);
+            let cancel_id = id.clone();
+            tokio::spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    eprintln!("\ncancelling… (cleaning up; press Ctrl-C again to force)");
+                    events::request_cancel(&cancel_id);
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        std::process::exit(130);
+                    }
+                }
+            });
+            id
+        }
+    };
     let result = run_spec_inner(ws, spec, spec_text, spec_label, &job_id).await;
     let (status, error, report_url) = match &result {
         Ok(o) if o.blocked => ("blocked", None, None),
@@ -326,6 +345,8 @@ async fn train_and_report(
     let needs_agent = cands.iter().any(|c| c.backend != BackendKind::Builtin);
     let hub = Hub::new();
     let mut agent: Option<Agent> = None;
+    // A rented instance: terminated by `finish` below, or on drop if anything fails.
+    let mut cloud: Option<(crate::cloud::Plan, crate::cloud::CloudInstance)> = None;
     if needs_agent {
         let (addr, _server) = hub.serve("127.0.0.1:0".parse()?).await?;
         let registry =
@@ -335,32 +356,50 @@ async fn train_and_report(
             .allow
             .iter()
             .find(|n| n.as_str() != "local" && registry.get(n).is_some());
-        let started = match ssh_name {
-            Some(name) => {
+        let cloud_name = crate::cloud::provider_in(spec, |n| registry.get(n).is_some());
+        // Ship the Python worker only when a candidate needs it (native jobs need no uv).
+        let needs_python = cands.iter().any(|c| c.backend == BackendKind::Python);
+        let ssh_worker = if needs_python { worker.clone() } else { None };
+        let started = match (ssh_name, cloud_name) {
+            (Some(name), _) => {
                 let ssh = registry
                     .get(name)
                     .ok_or_else(|| anyhow!("machine `{name}` vanished"))?
                     .to_ssh()?;
-                // Ship the Python worker only when a candidate needs it (native jobs need no uv).
-                let needs_python = cands.iter().any(|c| c.backend == BackendKind::Python);
-                let opts = tempera_exec::ssh::StartOpts {
-                    worker_dir: if needs_python { worker.clone() } else { None },
-                    ..Default::default()
-                };
-                let session = ssh.start(&hub, addr, &opts).await?;
-                let remote_job_dir = format!("{}/jobs/{job_id}", ssh.remote_root().await?);
-                crate::remote::set(
+                start_ssh(
+                    &hub,
+                    addr,
+                    ssh,
+                    format!("{name} (ssh)"),
+                    ssh_worker,
                     job_id,
-                    crate::remote::Remote {
-                        ssh,
-                        machine_id: session.machine_id.clone(),
-                        job_dir: job_dir.to_path_buf(),
-                        remote_job_dir,
-                    },
-                );
-                Agent::Ssh(name.clone(), Box::new(session))
+                    job_dir,
+                )
+                .await?
             }
-            None => {
+            (None, Some(provider)) => {
+                stage(job_id, "train", format!("estimating machines on {provider}"));
+                let w = crate::cloud::workload(spec, ds.rows, ds.columns.len() as u64, &cands);
+                let include_local = spec.compute.allow.iter().any(|n| n == "local");
+                let plan = crate::cloud::plan(&ws.root, spec, &provider, w, include_local).await?;
+                if plan.chosen().is_some() {
+                    crate::cloud::check_budget(&plan)?;
+                    let (inst, ssh) = crate::cloud::CloudInstance::launch(&ws.root, job_id, &plan).await?;
+                    let label = format!("{} (cloud)", inst.offer.label());
+                    // On error `inst` drops here and terminates the instance.
+                    let a = start_ssh(&hub, addr, ssh, label, ssh_worker, job_id, job_dir).await?;
+                    cloud = Some((plan, inst));
+                    a
+                } else if plan.recommendation.best().is_some() {
+                    ui::detail("this machine wins; nothing to rent");
+                    Agent::Local(
+                        LocalExecutor::start(&hub, &format!("http://{addr}"), worker.as_deref()).await?,
+                    )
+                } else {
+                    return Err(anyhow!("no {provider} offer fits this job"));
+                }
+            }
+            (None, None) => {
                 Agent::Local(LocalExecutor::start(&hub, &format!("http://{addr}"), worker.as_deref()).await?)
             }
         };
@@ -511,6 +550,38 @@ async fn train_and_report(
         a.stop(&hub).await;
     }
     crate::remote::remove(job_id);
+    // Naive baseline for the savings line: exhaustive search instead of successive halving.
+    let naive_multiplier = if spec.strategy.hpo.is_some() {
+        1.0 / 0.36
+    } else {
+        1.0
+    };
+    let cloud_cost = match cloud.take() {
+        Some((plan, inst)) => Some(inst.finish(&plan, naive_multiplier).await),
+        None => None,
+    };
+    if let Some(c) = &cloud_cost {
+        ui::step(&format!(
+            "Cost      estimated {}  ·  actual {}",
+            tempera_cloud::estimate::fmt_usd(c.estimated_usd),
+            tempera_cloud::estimate::fmt_usd(c.actual_usd)
+        ));
+        if let Some(s) = &c.savings {
+            ui::detail(&s.line());
+        }
+        events::emit(
+            job_id,
+            JobEvent::Cost {
+                machine: c.machine.clone(),
+                usd_per_hour: 0.0,
+                estimated_usd: c.estimated_usd,
+                spent_usd: c.actual_usd,
+                budget_usd: crate::cloud::budget_usd(spec).ok().flatten(),
+                status: "terminated",
+                savings: c.savings.as_ref().map(tempera_cloud::estimate::Savings::line),
+            },
+        );
+    }
     if let Some(w) = &winner {
         ui::verdict(w, metric, &summaries);
         events::emit(
@@ -545,7 +616,11 @@ async fn train_and_report(
         cost: CostSummary {
             wall_time_s: started.elapsed().as_secs_f64(),
             machine,
-            cost_usd: 0.0,
+            cost_usd: cloud_cost.as_ref().map_or(0.0, |c| c.actual_usd),
+            estimated_cost_usd: cloud_cost.as_ref().map(|c| c.estimated_usd),
+            savings: cloud_cost
+                .as_ref()
+                .and_then(|c| c.savings.as_ref().map(tempera_cloud::estimate::Savings::line)),
         },
         spec_yaml: spec_text.to_owned(),
         reproduce_command: format!("tempera run {spec_label}"),
@@ -1248,6 +1323,34 @@ fn new_job_id(name: &str) -> String {
 }
 
 /// The agent running this job's runs (one per job, so its size does not matter).
+/// Starts the agent on an SSH machine (LAN or rented) and registers the remote mirror.
+async fn start_ssh(
+    hub: &Hub,
+    addr: std::net::SocketAddr,
+    ssh: tempera_exec::SshMachine,
+    label: String,
+    worker_dir: Option<PathBuf>,
+    job_id: &str,
+    job_dir: &Path,
+) -> anyhow::Result<Agent> {
+    let opts = tempera_exec::ssh::StartOpts {
+        worker_dir,
+        ..Default::default()
+    };
+    let session = ssh.start(hub, addr, &opts).await?;
+    let remote_job_dir = format!("{}/jobs/{job_id}", ssh.remote_root().await?);
+    crate::remote::set(
+        job_id,
+        crate::remote::Remote {
+            ssh,
+            machine_id: session.machine_id.clone(),
+            job_dir: job_dir.to_path_buf(),
+            remote_job_dir,
+        },
+    );
+    Ok(Agent::Ssh(label, Box::new(session)))
+}
+
 #[allow(clippy::large_enum_variant)]
 enum Agent {
     Local(LocalExecutor),
@@ -1275,7 +1378,7 @@ impl Agent {
         };
         let name = match self {
             Self::Local(_) => "local".to_owned(),
-            Self::Ssh(n, _) => format!("{n} (ssh)"),
+            Self::Ssh(n, _) => n.clone(),
         };
         format!("{name} · {} CPU · {gpus}", hw.cpu_cores)
     }

@@ -86,7 +86,21 @@ export interface JobFinishedEvent {
 	error: string | null;
 }
 
+/** Cloud spend (M6): on launch, while running, and once at the end. */
+export interface CostEvent {
+	type: 'cost';
+	machine: string;
+	usd_per_hour: number;
+	estimated_usd: number;
+	spent_usd: number;
+	budget_usd: number | null;
+	status:
+		'launched' | 'running' | 'budget_alert' | 'budget_exceeded' | 'terminated' | (string & {});
+	savings: string | null;
+}
+
 export type JobEvent =
+	| CostEvent
 	| StageEvent
 	| AuditEvent
 	| BlockedEvent
@@ -148,6 +162,8 @@ export interface JobState {
 	runs: RunState[];
 	totalRuns: number | null;
 	jobEtaS: number | null;
+	/** Latest cloud spend, when the job runs on a rented machine. */
+	cost: Omit<CostEvent, 'type'> | null;
 	logs: LogLine[];
 	logsDropped: number;
 	winner: { run_id: string; algorithm: string; test: Evaluation } | null;
@@ -171,6 +187,7 @@ export function initialState(): JobState {
 		runs: [],
 		totalRuns: null,
 		jobEtaS: null,
+		cost: null,
 		logs: [],
 		logsDropped: 0,
 		winner: null,
@@ -314,6 +331,18 @@ export function reduce(s: JobState, ev: JobEvent): JobState {
 			if (ev.status === 'succeeded' && r.total_steps !== null) r.step = r.total_steps;
 			break;
 		}
+		case 'cost':
+			// The final event reports no hourly price; keep the last known one.
+			s.cost = {
+				machine: ev.machine,
+				usd_per_hour: ev.usd_per_hour || s.cost?.usd_per_hour || 0,
+				estimated_usd: ev.estimated_usd,
+				spent_usd: ev.spent_usd,
+				budget_usd: ev.budget_usd,
+				status: ev.status,
+				savings: ev.savings
+			};
+			break;
 		case 'winner':
 			s.winner = { run_id: ev.run_id, algorithm: ev.algorithm, test: ev.test };
 			break;

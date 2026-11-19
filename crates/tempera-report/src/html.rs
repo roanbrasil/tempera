@@ -144,8 +144,19 @@ fn header(out: &mut String, d: &ReportData) {
         } else {
             escape(&d.cost.machine)
         },
-        cost = fmt::cost(d.cost.cost_usd),
+        cost = cost_cell(d),
     );
+}
+
+fn cost_cell(d: &ReportData) -> String {
+    let mut s = fmt::cost(d.cost.cost_usd);
+    if let Some(e) = d.cost.estimated_cost_usd {
+        let _ = write!(s, " <span class=\"muted\">(estimated {})</span>", fmt::cost(e));
+    }
+    if let Some(line) = &d.cost.savings {
+        let _ = write!(s, "<br><span class=\"muted\">{}</span>", escape(line));
+    }
+    s
 }
 
 // ---------------------------------------------------------------- 2. verdict
@@ -839,6 +850,7 @@ code{font-family:var(--mono);font-size:.88em}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .eyebrow{text-transform:uppercase;letter-spacing:.08em;font-size:.72rem;font-weight:600;color:var(--muted);margin:0}
 .lead{color:var(--muted);margin:-.2em 0 1em}
+.muted{color:var(--muted);font-weight:400}
 .sub{color:var(--muted);font-size:.86em}
 .empty{color:var(--muted);font-style:italic}
 .bad{color:var(--red)}

@@ -323,3 +323,33 @@ describe('helpers', () => {
 		expect(shared[0]).toBe(a.steps);
 	});
 });
+
+describe('cost events', () => {
+	it('keeps the latest spend and the last known hourly price', () => {
+		const s = buildState([
+			{
+				type: 'cost',
+				machine: 'mock:RTX 4090',
+				usd_per_hour: 0.4,
+				estimated_usd: 0.1,
+				spent_usd: 0,
+				budget_usd: 1,
+				status: 'launched',
+				savings: null
+			},
+			{
+				type: 'cost',
+				machine: 'mock:RTX 4090',
+				usd_per_hour: 0,
+				estimated_usd: 0.1,
+				spent_usd: 0.08,
+				budget_usd: 1,
+				status: 'terminated',
+				savings: 'Savings vs. naive run (x): $0.30 (79%)'
+			}
+		]);
+		expect(s.cost?.spent_usd).toBe(0.08);
+		expect(s.cost?.usd_per_hour).toBe(0.4);
+		expect(s.cost?.savings).toContain('Savings');
+	});
+});

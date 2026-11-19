@@ -18,6 +18,7 @@ tempera-proto.workspace = true
 tempera-data = { path = "../tempera-data" }
 tempera-audit = { path = "../tempera-audit" }
 tempera-exec = { path = "../tempera-exec" }
+tempera-cloud = { path = "../tempera-cloud" }
 tempera-native = { path = "../tempera-native" }
 tempera-report = { path = "../tempera-report" }
 tempera-track = { path = "../tempera-track" }

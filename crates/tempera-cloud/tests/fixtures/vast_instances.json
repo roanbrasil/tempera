@@ -1,0 +1,4 @@
+{"instances":[
+ {"id":9001,"label":"tempera-job-7","actual_status":"running","ssh_host":"ssh4.vast.ai","ssh_port":22101,"dph_total":0.18},
+ {"id":9002,"label":null,"actual_status":"loading","ssh_host":null,"ssh_port":null,"dph_total":0.5}
+]}

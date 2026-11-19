@@ -1,0 +1,22 @@
+[package]
+name = "tempera-cloud"
+description = "Cloud GPU providers (RunPod, Vast.ai), pricing catalog, cost estimation and guardrails."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -175,6 +175,21 @@
 						<span>Job ETA <strong class="num">{fmtDuration(view.jobEtaS)}</strong></span>
 					{/if}
 				</div>
+				{#if view?.cost}
+					{@const c = view.cost}
+					<div
+						class="row small cost"
+						class:warn={c.status === 'budget_alert' || c.status === 'budget_exceeded'}
+					>
+						<span>{c.machine}</span>
+						<span>spent <strong class="num">${c.spent_usd.toFixed(2)}</strong></span>
+						<span>estimate <strong class="num">${c.estimated_usd.toFixed(2)}</strong></span>
+						{#if c.budget_usd !== null}
+							<span>budget <strong class="num">${c.budget_usd.toFixed(2)}</strong></span>
+						{/if}
+						{#if c.savings}<span class="spacer"></span><span>{c.savings}</span>{/if}
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</section>
@@ -333,6 +348,13 @@
 		margin-top: 1.1rem;
 		display: grid;
 		gap: 0.4rem;
+	}
+	.cost {
+		flex-wrap: wrap;
+		gap: 0.3rem 1rem;
+	}
+	.cost.warn {
+		color: var(--warn);
 	}
 	.flush {
 		padding: 0.9rem 0.4rem 0.4rem;

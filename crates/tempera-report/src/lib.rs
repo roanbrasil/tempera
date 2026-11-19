@@ -84,6 +84,12 @@ pub struct CostSummary {
     /// Where it ran, e.g. `local (8 CPU, no GPU)`.
     pub machine: String,
     pub cost_usd: f64,
+    /// Estimate made before renting (cloud jobs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
+    /// "Savings vs. naive run …" (cloud jobs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub savings: Option<String>,
 }
 
 /// Renders the full HTML document: one self-contained file with inline CSS

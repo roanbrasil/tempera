@@ -2,6 +2,8 @@
 
 mod builtin;
 mod candidates;
+mod cloud;
+mod cloud_cli;
 mod draft;
 mod events;
 mod hpo;
@@ -89,6 +91,11 @@ enum Command {
         #[command(subcommand)]
         action: machines_cli::MachinesCmd,
     },
+    /// Cloud GPUs: offers, prices, estimates, instances and the orphan reaper.
+    Cloud {
+        #[command(subcommand)]
+        action: cloud_cli::CloudCmd,
+    },
 }
 
 fn main() {
@@ -132,10 +139,13 @@ async fn dispatch(cmd: Command) -> anyhow::Result<i32> {
         }
         Command::Schema => print!("{}", tempera_core::schema::job_spec_schema()),
         Command::Machines { action } => return machines_cli::run(&ws.root, action).await,
+        Command::Cloud { action } => return cloud_cli::run(&ws.root, action).await,
         Command::Up { host, port } => {
             let addr: std::net::SocketAddr = format!("{host}:{port}")
                 .parse()
                 .with_context(|| format!("invalid address {host}:{port}"))?;
+            // Terminates cloud instances that crashed jobs left behind.
+            cloud::spawn_reaper(ws.root.clone());
             http::serve(ws, addr).await?;
         }
         Command::Ingest { data } => {

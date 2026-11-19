@@ -63,6 +63,17 @@ pub enum JobEvent {
         algorithm: String,
         test: Value,
     },
+    /// Cloud spend: on launch, every ~15 s while running, and once at the end
+    /// (`status`: launched | running | budget_alert | budget_exceeded | terminated).
+    Cost {
+        machine: String,
+        usd_per_hour: f64,
+        estimated_usd: f64,
+        spent_usd: f64,
+        budget_usd: Option<f64>,
+        status: &'static str,
+        savings: Option<String>,
+    },
     JobFinished {
         status: &'static str,
         report_url: Option<String>,

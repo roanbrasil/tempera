@@ -187,3 +187,136 @@ fn anomaly_detection_end_to_end() {
     );
     assert!(stdout.contains("Winner    isolation_forest"), "{stdout}");
 }
+
+fn tempera_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_tempera"));
+    c.args(args)
+        .current_dir(repo().join("examples"))
+        .env("TEMPERA_HOME", home)
+        .env("TEMPERA_AGENT_BIN", agent_bin())
+        .env("TEMPERA_NUM_THREADS", "2")
+        .env("NO_COLOR", "1")
+        .env("TEMPERA_ADVISOR", "off");
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    c.output().unwrap()
+}
+
+fn houses_on(dir: &Path, extra: &str) -> PathBuf {
+    write_spec(
+        dir,
+        "cloud.yaml",
+        &format!(
+            "version: 1\nname: houses\ndata: {{ source: $DATA/houses.csv, target: price }}\nstrategy: {{ candidates: [linear_regression, ridge] }}\n{extra}"
+        ),
+    )
+}
+
+/// M6 without docker: the estimate prints a comparison and the savings line,
+/// and a budget below the estimate refuses the job before renting anything.
+#[test]
+fn cloud_estimate_and_budget_refusal_on_mock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("mock-cloud.json");
+    let env = [("TEMPERA_MOCK_CLOUD_STATE", state.to_str().unwrap())];
+    let spec = houses_on(tmp.path(), "compute: { allow: [mock, local] }\n");
+    let out = tempera_env(tmp.path(), &["cloud", "estimate", spec.to_str().unwrap()], &env);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("estimated before renting"), "{stdout}");
+    assert!(
+        stdout.contains("local: $0"),
+        "local wins `cheapest` when it fits: {stdout}"
+    );
+    let prices = tempera_env(tmp.path(), &["cloud", "prices", "mock"], &env);
+    assert!(String::from_utf8_lossy(&prices.stdout).contains("mock: 4 offers, updated"));
+
+    let poor = houses_on(
+        tmp.path(),
+        "compute: { allow: [mock] }\nbudget: { max_cost: { amount: 0.0001, currency: USD } }\n",
+    );
+    let out = tempera_env(tmp.path(), &["run", poor.to_str().unwrap()], &env);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("exceeds budget.max_cost"), "{stderr}");
+    // Nothing was rented.
+    let st = std::fs::read_to_string(&state).unwrap_or_default();
+    assert!(!st.contains("tempera-"), "{st}");
+}
+
+/// M6 end to end: a "rented" instance (mock provider + sshd container) runs
+/// the job over SSH, is terminated afterwards, and the report carries the
+/// estimated/actual cost and the savings line. Opt-in like the SSH tests.
+#[test]
+fn cloud_job_end_to_end_on_mock_docker() {
+    if std::env::var_os("TEMPERA_SSH_TESTS").is_none()
+        || !Command::new("docker")
+            .arg("info")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    {
+        eprintln!("skipping: needs TEMPERA_SSH_TESTS=1 and docker");
+        return;
+    }
+    let image = "tempera-ssh-test:latest";
+    let ctx = repo().join("crates/tempera-exec/tests/ssh");
+    let ok = Command::new("docker")
+        .args(["build", "-q", "-t", image])
+        .arg(&ctx)
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let state = tmp.path().join("mock-cloud.json");
+    let env = [
+        ("TEMPERA_MOCK_CLOUD_STATE", state.to_str().unwrap()),
+        ("TEMPERA_MOCK_DOCKER_IMAGE", image),
+    ];
+    let spec = houses_on(
+        tmp.path(),
+        "compute: { allow: [mock], spot: false }\nbudget: { max_cost: { amount: 1.0, currency: USD } }\n",
+    );
+    let out = tempera_env(tmp.path(), &["run", spec.to_str().unwrap()], &env);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "stdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("Renting   mock:"), "{stdout}");
+    assert!(stdout.contains("(cloud)"), "{stdout}");
+    assert!(stdout.contains("terminated mock:"), "{stdout}");
+    assert!(stdout.contains("Savings vs. naive run"), "{stdout}");
+
+    // The instance is gone, its container removed, its lease closed.
+    let st: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&state).unwrap()).unwrap();
+    let insts = st["instances"].as_array().unwrap();
+    assert_eq!(insts.len(), 1);
+    assert_eq!(insts[0]["state"], "gone");
+    assert!(insts[0]["container"].is_null());
+    let leases = std::fs::read_to_string(tmp.path().join("cloud/leases.json")).unwrap();
+    assert_eq!(leases.trim(), "[]");
+
+    let report = std::fs::read_dir(tmp.path().join("jobs"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().join("report.json"))
+        .find(|p| p.is_file())
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(report).unwrap()).unwrap();
+    assert!(r["cost"]["estimated_cost_usd"].as_f64().unwrap() > 0.0);
+    assert!(r["cost"]["cost_usd"].as_f64().unwrap() > 0.0);
+    assert!(
+        r["cost"]["savings"]
+            .as_str()
+            .unwrap()
+            .starts_with("Savings vs. naive run")
+    );
+    assert!(r["cost"]["machine"].as_str().unwrap().contains("(cloud)"));
+}
