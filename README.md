@@ -23,11 +23,35 @@ Têmpera is an ML model training platform that takes you from a raw data file to
 - 📈 **Tracks:** live metrics, ETA, and estimated vs. actual cost.
 - 📦 **Delivers:** an evaluated model, a report, and an artifact (ONNX/safetensors) ready to serve.
 
-> Status: **M1 · Local tabular (CLI)**. Ingest → audit → split → train native + Python candidates
-> through the local agent → leaderboard → one-time test evaluation → HTML report. Web UI comes in M2.
-> See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
+> Status: **M1 done; M2–M4 mostly done.** Web UI with live training, 26 algorithms (tabular
+> supervised, clustering, anomaly detection), budget-aware hyperparameter search, a 13-check data audit
+> plus a local SLM advisor, and jobs on your own machines over SSH. Cloud GPUs (M6) and deep learning
+> (M5) are next. See the [Roadmap](docs/wiki/Roadmap.md) and the issues.
 
 ## Quick start
+
+### Web UI
+
+```bash
+(cd ui && npm ci && npm run build)   # Node 22; embeds into the binary
+cargo build --release
+./target/release/tempera up          # http://127.0.0.1:7070
+```
+
+Upload a file, pick what to predict, resolve the audit, choose algorithms and a machine, and watch
+training live. Everything the UI does is a `tempera.yaml` you can review and keep.
+
+### Your own GPU box over SSH
+
+```bash
+tempera machines add gpu-box --host 192.168.0.42 --user ana   # uses your ~/.ssh/config and agent
+tempera machines check gpu-box                                # installs the agent, shows the hardware
+```
+
+Then add `compute: { allow: [gpu-box] }` to the spec. Data goes to the machine's cache by content hash
+(sent once), results come back automatically.
+
+### CLI
 
 Requirements: Rust (see `rust-toolchain.toml`) and, for LightGBM/XGBoost/random forest,
 [uv](https://docs.astral.sh/uv/). Without uv the Python candidates are skipped and the native Rust
