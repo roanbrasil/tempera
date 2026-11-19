@@ -5,31 +5,6 @@ minor versions may break the spec format or the CLI.
 
 ## [Unreleased]
 
-### Added
-
-- **Cloud GPUs (M6, preview):** new `tempera-cloud` crate.
-  - Providers: RunPod (GraphQL prices, REST pods) and Vast.ai (reliability, bandwidth and disk
-    filters). Both were built from public API docs and are not yet tested against a live account.
-    A `mock` provider can boot a real sshd container and simulate preemption.
-  - Pricing catalog: timestamped snapshots under `<TEMPERA_HOME>/pricing/`.
-  - Estimates before renting: ETA and cost per machine, ranked by `cheapest`, `fastest` or
-    `cheapest_under`, with a one-line rationale. This machine competes at $0 when `local` is allowed.
-  - Guardrails:
-    - A job whose estimate is over `budget.max_cost` is refused before anything is rented.
-    - Spend alerts at 80% of the budget and the job is cancelled at 100%.
-    - Leases with heartbeats are written before launch.
-    - The instance is always terminated: on success, error, cancel or Ctrl-C.
-    - The orphan reaper runs on `tempera cloud reap` and in the background under `tempera up`.
-  - Estimated vs. actual cost and a "savings vs. naive run" line appear in the CLI, the report and
-    the live job page.
-  - `tempera cloud offers | sync | prices | estimate | instances | reap`.
-
-### Changed
-
-- Linear and logistic regression use the crate's own solvers. This drops the unmaintained `paste`
-  crate.
-- sqlx 0.9.1, which fixes RUSTSEC-2026-0459. MSRV is now 1.94.
-
 ## [0.1.0] - 2026-11-19
 
 First public preview. Tabular ML end to end, on your machine or on your own machines over SSH.
@@ -58,6 +33,31 @@ First public preview. Tabular ML end to end, on your machine or on your own mach
   is installed over the system OpenSSH, data is sent once (content-addressed cache), results
   come back automatically.
 
+### Cloud GPUs (M6, preview)
+
+New `tempera-cloud` crate.
+- Providers: RunPod (GraphQL prices, REST pods) and Vast.ai (reliability, bandwidth and disk
+  filters). Both were built from public API docs and are not yet tested against a live account.
+  A `mock` provider can boot a real sshd container and simulate preemption.
+- Pricing catalog: timestamped snapshots under `<TEMPERA_HOME>/pricing/`.
+- Estimates before renting: ETA and cost per machine, ranked by `cheapest`, `fastest` or
+  `cheapest_under`, with a one-line rationale. This machine competes at $0 when `local` is allowed.
+- Guardrails:
+  - A job whose estimate is over `budget.max_cost` is refused before anything is rented.
+  - Spend alerts at 80% of the budget and the job is cancelled at 100%.
+  - Leases with heartbeats are written before launch.
+  - The instance is always terminated: on success, error, cancel or Ctrl-C.
+  - The orphan reaper runs on `tempera cloud reap` and in the background under `tempera up`.
+- Estimated vs. actual cost and a "savings vs. naive run" line appear in the CLI, the report and
+  the live job page.
+- `tempera cloud offers | sync | prices | estimate | instances | reap`.
+
+### Dependencies
+
+- Linear and logistic regression use the crate's own solvers. This drops the unmaintained `paste`
+  crate.
+- sqlx 0.9.1, which fixes RUSTSEC-2026-0459. MSRV is now 1.94.
+
 ### Install
 
 Download the archive for your platform below, extract it and run `./tempera --help`. Keep
@@ -66,7 +66,8 @@ Download the archive for your platform below, extract it and run `./tempera --he
 
 ### Known limitations
 
-- Cloud GPUs (M6) and deep learning (M5) are not in this release.
+- Cloud GPUs are a preview: the RunPod and Vast.ai clients have not run against a live account
+  yet, and cost estimates are not calibrated. Deep learning (M5) is not in this release.
 - Windows: use WSL2.
 - Live job events are kept in memory; after a server restart the UI shows the stored results.
 - The license is not decided yet (see issue #9).
