@@ -358,7 +358,7 @@ async fn train_and_report(
                         remote_job_dir,
                     },
                 );
-                Agent::Ssh(name.clone(), session)
+                Agent::Ssh(name.clone(), Box::new(session))
             }
             None => {
                 Agent::Local(LocalExecutor::start(&hub, &format!("http://{addr}"), worker.as_deref()).await?)
@@ -1247,10 +1247,11 @@ fn new_job_id(name: &str) -> String {
     format!("{name}-{stamp}-{suffix:04x}")
 }
 
-/// The agent running this job's runs.
+/// The agent running this job's runs (one per job, so its size does not matter).
+#[allow(clippy::large_enum_variant)]
 enum Agent {
     Local(LocalExecutor),
-    Ssh(String, tempera_exec::ssh::SshSession),
+    Ssh(String, Box<tempera_exec::ssh::SshSession>),
 }
 
 impl Agent {
@@ -1282,7 +1283,7 @@ impl Agent {
     async fn stop(self, hub: &Hub) {
         match self {
             Self::Local(e) => e.stop(hub).await,
-            Self::Ssh(_, s) => s.stop(hub).await,
+            Self::Ssh(_, s) => (*s).stop(hub).await,
         }
     }
 }
