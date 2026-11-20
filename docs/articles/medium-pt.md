@@ -93,7 +93,7 @@ tempera run churn.yaml   # com compute: { allow: [gpu-box] } no spec
 
 Gravei a demonstração completa, do terminal à interface web, com o exemplo de churn: a auditoria bloqueando, a coluna descartada, sete candidatos treinando e o relatório no fim.
 
-{{YOUTUBE}}
+https://youtu.be/O7OKunr6iPE
 
 Um detalhe que aparece no vídeo e vale repetir: quem venceu foi uma regressão logística, não o CatBoost nem o XGBoost. Rodar o baseline e os modelos simples primeiro existe exatamente para isso.
 
@@ -105,7 +105,7 @@ Prefiro dizer antes que alguém descubra:
 
 - **GPU barata na nuvem (M6)** está em preview. Já existem os clientes de RunPod e Vast.ai, o catálogo de preços, a estimativa de custo por máquina, o teto de orçamento que recusa o job antes de alugar e um reaper que derruba instâncias órfãs. Mas os clientes foram escritos a partir da documentação pública das APIs e ainda não rodaram contra uma conta real, e a estimativa de custo ainda não foi calibrada.
 - **Deep learning (M5)**, com visão, NLP e fine-tuning com LoRA, também não começou. Hoje o Têmpera é forte em dados tabulares.
-- O painel de treino ao vivo ainda não mostra custo, uso de GPU nem alertas de overfitting.
+- O painel de treino ao vivo ainda não mostra uso de GPU nem alertas de overfitting.
 
 ## Experimente e me conte onde quebrou
 
