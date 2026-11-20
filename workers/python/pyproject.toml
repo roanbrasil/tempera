@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Têmpera Python worker: runs ML backends and emits JSONL events for the agent."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "UNLICENSED" }
+license = "MIT OR Apache-2.0"
 dependencies = [
     "pyyaml>=6",
     "pyarrow>=17",

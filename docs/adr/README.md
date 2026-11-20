@@ -10,5 +10,6 @@
 | [0006](0006-ui-sveltekit.md) | Static SvelteKit UI embedded in the binary | Accepted |
 | [0007](0007-ssh-via-openssh.md) | SSH through the system OpenSSH client instead of russh | Accepted |
 | [0008](0008-slm-via-local-endpoint.md) | The SLM advisor talks to a local OpenAI-compatible endpoint | Accepted |
+| [0009](0009-license.md) | License: MIT OR Apache-2.0; open-core business model | Accepted |
 
 New ADR: copy the [template](template.md) with the next number.

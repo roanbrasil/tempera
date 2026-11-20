@@ -5,11 +5,21 @@ minor versions may break the spec format or the CLI.
 
 ## [Unreleased]
 
+### License
+
+- Têmpera is now dual licensed **MIT OR Apache-2.0** ([ADR 0009](docs/adr/0009-license.md)).
+
+### Security
+
+- `cargo deny` passes: RUSTSEC-2026-0194/0195 (quick-xml, reachable only through polars' cloud
+  I/O, which Têmpera never uses) are ignored with a reason, and "unmaintained" advisories fail
+  only for direct dependencies (the flagged ones come from polars/arrow).
+
 ### Added
 
 - `tempera mcp`: MCP server on stdio (protocol 2025-06-18, also 2025-03-26 and 2024-11-05) with
   11 tools: `profile_data`, `init_spec`, `validate_spec`, `spec_schema`, `audit`, `run`,
-  `estimate`, `list_jobs`, `show_job`, `report_path`. Tools run the real CLI, so the audit and the
+  `estimate`, `audit_traces`, `list_jobs`, `show_job`, `report_path`. Tools run the real CLI, so the audit and the
   test-once rule apply to agents too. Paid cloud jobs need `TEMPERA_MCP_ALLOW_CLOUD=1`.
 - `tempera traces audit`: reads agent traces (OpenAI chat and ShareGPT/Hermes function-calling
   JSONL), splits them by task, and runs 9 checks before LLM fine-tuning: prompts shared between
@@ -84,4 +94,4 @@ Download the archive for your platform below, extract it and run `./tempera --he
   yet, and cost estimates are not calibrated. Deep learning (M5) is not in this release.
 - Windows: use WSL2.
 - Live job events are kept in memory; after a server restart the UI shows the stored results.
-- The license is not decided yet (see issue #9).
+- The license is not decided yet (see issue #9). *(Decided after release: MIT OR Apache-2.0.)*

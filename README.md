@@ -229,4 +229,6 @@ tempera/
 
 ## License
 
-To be decided (see the licensing issue). The repository is public; until a license is added, all rights are reserved.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+Unless you state otherwise, any contribution you submit is dual licensed the same way, without
+additional terms. See [ADR 0009](docs/adr/0009-license.md).

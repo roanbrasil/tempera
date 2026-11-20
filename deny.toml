@@ -5,6 +5,17 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# Fail on "unmaintained" only for crates we depend on directly. The ones flagged
+# today (bincode, chrono, chrono-tz, humantime) come in through polars/arrow and
+# have no maintained drop-in that those crates accept; they are tracked upstream.
+unmaintained = "workspace"
+ignore = [
+    # quick-xml in object_store, which polars 0.55 always enables (polars-stream →
+    # polars-io/file_cache → cloud). Têmpera never reads cloud URLs, so the XML
+    # parser never sees input. Remove when polars ships object_store ≥ a fixed quick-xml.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml only reachable via object_store cloud I/O, which Têmpera never uses" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml only reachable via object_store cloud I/O, which Têmpera never uses" },
+]
 
 [licenses]
 version = 2
@@ -23,10 +34,12 @@ allow = [
     "CDLA-Permissive-2.0",
     "MPL-2.0",
     "BSL-1.0",
+    # Public-domain dedication (tiny-keccak via const-random → ahash → arrow).
+    "CC0-1.0",
 ]
 
 [licenses.private]
-# Workspace crates are not published (license still to be decided, see issue #9).
+# Workspace crates are not published to crates.io (licensed MIT OR Apache-2.0, ADR 0009).
 ignore = true
 
 [bans]

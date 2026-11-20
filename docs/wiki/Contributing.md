@@ -44,3 +44,9 @@
 ## Decisions
 
 Changed something structural? Write an ADR in `docs/adr/` (see the [template](../adr/template.md)).
+
+## License of contributions
+
+Têmpera is dual licensed MIT OR Apache-2.0 ([ADR 0009](../adr/0009-license.md)). Unless you
+state otherwise, any contribution you submit is licensed the same way, without additional terms.
+There is no CLA.

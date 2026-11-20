@@ -79,7 +79,7 @@ jobs:
           # The Python worker sits next to the binaries, where `tempera` looks for it.
           rsync -a --exclude '.venv' --exclude '__pycache__' --exclude '*.egg-info' workers/python "dist/$name/workers/"
           cp -r examples README.md "dist/$name/"
-          [ -f LICENSE ] && cp LICENSE "dist/$name/" || true
+          cp LICENSE-MIT LICENSE-APACHE "dist/$name/"
           [ -f CHANGELOG.md ] && cp CHANGELOG.md "dist/$name/" || true
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           echo "ARCHIVE=dist/$name.tar.gz" >> "$GITHUB_ENV"
