@@ -160,6 +160,14 @@ fn agent_drives_churn_from_blocked_audit_to_report() {
         "{text}"
     );
 
+    // Agent traces go through the same gate.
+    let traces = repo().join("examples/data/agent_traces.jsonl");
+    let (err, text) = c.tool("audit_traces", json!({ "data": traces }));
+    assert!(
+        err && text.starts_with("BLOCKED") && text.contains("T5"),
+        "{text}"
+    );
+
     let (err, path) = c.tool("report_path", json!({}));
     assert!(!err, "{path}");
     let html = std::fs::read_to_string(path.trim()).unwrap();

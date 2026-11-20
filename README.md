@@ -191,6 +191,7 @@ The documentation lives in [`docs/wiki`](docs/wiki/Home.md), mirrored to the Git
 | [Data Audit](docs/wiki/Data-Audit.md) | Bias/leakage checks and the role of the SLM |
 | [Algorithm Catalog](docs/wiki/Algorithm-Catalog.md) | What is supported, and on which backend |
 | [Execution and Machines](docs/wiki/Execution-and-Machines.md) | Local, SSH/LAN, cloud, agent, checkpointing |
+| [Agent Traces](docs/wiki/Agent-Traces.md) | Auditing chat/tool-call data before LLM fine-tuning |
 | [Agents (MCP)](docs/wiki/Agents-MCP.md) | Using Têmpera from AI agents, tools and guardrails |
 | [Cost and Estimation](docs/wiki/Cost-and-Estimation.md) | ETA, memory, cost, savings strategies |
 | [Contracts and Specifications](docs/wiki/Contracts.md) | `tempera.yaml`, protobuf, Arrow layout |

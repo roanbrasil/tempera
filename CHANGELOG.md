@@ -8,9 +8,16 @@ minor versions may break the spec format or the CLI.
 ### Added
 
 - `tempera mcp`: MCP server on stdio (protocol 2025-06-18, also 2025-03-26 and 2024-11-05) with
-  10 tools: `profile_data`, `init_spec`, `validate_spec`, `spec_schema`, `audit`, `run`,
+  11 tools: `profile_data`, `init_spec`, `validate_spec`, `spec_schema`, `audit`, `run`,
   `estimate`, `list_jobs`, `show_job`, `report_path`. Tools run the real CLI, so the audit and the
   test-once rule apply to agents too. Paid cloud jobs need `TEMPERA_MCP_ALLOW_CLOUD=1`.
+- `tempera traces audit`: reads agent traces (OpenAI chat and ShareGPT/Hermes function-calling
+  JSONL), splits them by task, and runs 9 checks before LLM fine-tuning: prompts shared between
+  train and test (MinHash/LSH), duplicates, benchmark contamination (Tülu 3 8-gram rule),
+  personal data, malformed tool calls against the declared JSON Schema, size, tool balance, no
+  "don't call a tool" examples, unreadable lines. Also as the MCP tool `audit_traces`.
+- Example agent traces with planted problems and a clean twin (`examples/data/agent_*.jsonl`).
+- Literature review for agents and M5: `docs/research/agents-and-m5-literature.md`.
 
 ## [0.1.0] - 2026-11-19
 

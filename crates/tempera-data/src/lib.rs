@@ -7,6 +7,7 @@ pub mod infer;
 pub mod ingest;
 pub mod profile;
 pub mod split;
+pub mod traces;
 
 pub use error::{DataError, Result};
 pub use infer::{TaskInference, infer_task};

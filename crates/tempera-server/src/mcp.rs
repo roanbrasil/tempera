@@ -166,6 +166,13 @@ fn tools() -> Value {
           "inputSchema": spec },
         { "name": "estimate", "description": "Estimate time and cost of a job on each allowed machine without renting anything.",
           "inputSchema": spec, "annotations": { "readOnlyHint": true } },
+        { "name": "audit_traces", "description": "Audit agent traces (JSONL chat conversations with tool calls, OpenAI or ShareGPT/Hermes format) before fine-tuning an LLM: same prompt in train and test, duplicates, benchmark contamination, personal data, malformed tool calls, size and balance. BLOCKED means a human must decide.",
+          "inputSchema": { "type": "object", "properties": {
+              "data": { "type": "string", "description": "Path to the JSONL file" },
+              "benchmarks": { "type": "array", "items": { "type": "string" },
+                              "description": "Benchmarks you will report on, as NAME=prompts.jsonl" } },
+              "required": ["data"] },
+          "annotations": { "readOnlyHint": true } },
         { "name": "list_jobs", "description": "Recent jobs with status, task and metric.",
           "inputSchema": { "type": "object", "properties": {
               "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
@@ -228,6 +235,22 @@ fn call(name: &str, args: &Value, cli: &dyn Cli, allow_cloud: bool) -> Result<Va
             vec!["run".into(), spec]
         }
         "estimate" => vec!["cloud".into(), "estimate".into(), str_arg(args, "spec")?],
+        "audit_traces" => {
+            let mut v = vec!["traces".into(), "audit".into(), str_arg(args, "data")?];
+            for b in args
+                .get("benchmarks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let b = b
+                    .as_str()
+                    .filter(|b| b.contains('='))
+                    .ok_or_else(|| ToolError::Invalid("benchmarks must be NAME=FILE strings".into()))?;
+                v.extend(["--benchmark".into(), b.to_owned()]);
+            }
+            v
+        }
         "list_jobs" => {
             let limit = args
                 .get("limit")
@@ -393,7 +416,7 @@ mod tests {
         let f = Fake::new(0, "");
         let r = handle(&req("tools/list", json!({})), &f, false).unwrap();
         let tools = r["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 11);
         for t in tools {
             assert!(t["name"].is_string() && t["description"].is_string());
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
@@ -421,6 +444,12 @@ mod tests {
         call_tool(&f, "show_job", json!({ "job": "abc" }), false);
         call_tool(&f, "report_path", json!({}), false);
         call_tool(&f, "estimate", json!({ "spec": "a.yaml" }), false);
+        call_tool(
+            &f,
+            "audit_traces",
+            json!({ "data": "t.jsonl", "benchmarks": ["bfcl=b.jsonl"] }),
+            false,
+        );
         let s = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
         assert_eq!(
             f.calls(),
@@ -432,6 +461,7 @@ mod tests {
                 s(&["runs", "abc"]),
                 s(&["report"]),
                 s(&["cloud", "estimate", "a.yaml"]),
+                s(&["traces", "audit", "t.jsonl", "--benchmark", "bfcl=b.jsonl"]),
             ]
         );
     }
@@ -494,6 +524,19 @@ mod tests {
             assert_eq!(r["result"]["isError"], false, "{allow}: {r}");
         }
         assert_eq!(f.calls().len(), 2);
+    }
+
+    #[test]
+    fn audit_traces_rejects_malformed_benchmarks() {
+        let f = Fake::new(0, "");
+        let r = call_tool(
+            &f,
+            "audit_traces",
+            json!({ "data": "t.jsonl", "benchmarks": ["no-equals"] }),
+            false,
+        );
+        assert_eq!(r["result"]["isError"], true);
+        assert!(f.calls().is_empty());
     }
 
     #[test]

@@ -28,6 +28,7 @@ Relative paths in tool arguments resolve against the server's working directory.
 | `audit` | The 13-check data audit, no training | audit result |
 | `run` | Audit → split → train candidates → winner → test set once → report | job, models, report |
 | `estimate` | ETA and cost on each allowed machine; rents nothing | no |
+| `audit_traces` | Audit agent traces (chat + tool calls) before fine-tuning | no |
 | `list_jobs` | Recent jobs | no |
 | `show_job` | Runs of a job with validation scores and the winner | no |
 | `report_path` | Path of a job's HTML report | no |
