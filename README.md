@@ -79,6 +79,20 @@ Then `compute: { allow: [runpod, local] }` and a `budget.max_cost` in USD. Têmp
 cheapest machine that fits, runs the job over SSH and always terminates it. See
 [Execution and Machines](docs/wiki/Execution-and-Machines.md#cloud-gpu-via-api-key).
 
+### From an AI agent (MCP)
+
+`tempera mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio, so Claude Code,
+Hermes Agent, OpenClaw or any MCP client can profile data, audit, train and read reports:
+
+```bash
+claude mcp add tempera -- tempera mcp
+```
+
+The agent gets the same guardrails as you: red audit findings block training and no tool accepts
+them on your behalf, the test set is still read once, and a job that would rent paid cloud
+machines is refused unless you started the server with `TEMPERA_MCP_ALLOW_CLOUD=1`. See
+[Agents (MCP)](docs/wiki/Agents-MCP.md).
+
 ### CLI
 
 Requirements: Rust (see `rust-toolchain.toml`) and, for LightGBM/XGBoost/random forest,
@@ -177,6 +191,7 @@ The documentation lives in [`docs/wiki`](docs/wiki/Home.md), mirrored to the Git
 | [Data Audit](docs/wiki/Data-Audit.md) | Bias/leakage checks and the role of the SLM |
 | [Algorithm Catalog](docs/wiki/Algorithm-Catalog.md) | What is supported, and on which backend |
 | [Execution and Machines](docs/wiki/Execution-and-Machines.md) | Local, SSH/LAN, cloud, agent, checkpointing |
+| [Agents (MCP)](docs/wiki/Agents-MCP.md) | Using Têmpera from AI agents, tools and guardrails |
 | [Cost and Estimation](docs/wiki/Cost-and-Estimation.md) | ETA, memory, cost, savings strategies |
 | [Contracts and Specifications](docs/wiki/Contracts.md) | `tempera.yaml`, protobuf, Arrow layout |
 | [Security and Privacy](docs/wiki/Security.md) | Secrets, SSH, LGPD/GDPR, isolation |

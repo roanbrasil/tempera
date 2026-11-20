@@ -9,6 +9,7 @@ mod events;
 mod hpo;
 mod http;
 mod machines_cli;
+mod mcp;
 mod orchestrator;
 mod quality;
 mod remote;
@@ -96,6 +97,9 @@ enum Command {
         #[command(subcommand)]
         action: cloud_cli::CloudCmd,
     },
+    /// MCP server on stdio, so agents (Claude Code, Hermes Agent, OpenClaw…) can use Têmpera.
+    /// Jobs that rent paid cloud machines need TEMPERA_MCP_ALLOW_CLOUD=1.
+    Mcp,
 }
 
 fn main() {
@@ -140,6 +144,7 @@ async fn dispatch(cmd: Command) -> anyhow::Result<i32> {
         Command::Schema => print!("{}", tempera_core::schema::job_spec_schema()),
         Command::Machines { action } => return machines_cli::run(&ws.root, action).await,
         Command::Cloud { action } => return cloud_cli::run(&ws.root, action).await,
+        Command::Mcp => tokio::task::spawn_blocking(|| mcp::serve(&mcp::SelfExe)).await??,
         Command::Up { host, port } => {
             let addr: std::net::SocketAddr = format!("{host}:{port}")
                 .parse()

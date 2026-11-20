@@ -5,6 +5,13 @@ minor versions may break the spec format or the CLI.
 
 ## [Unreleased]
 
+### Added
+
+- `tempera mcp`: MCP server on stdio (protocol 2025-06-18, also 2025-03-26 and 2024-11-05) with
+  10 tools: `profile_data`, `init_spec`, `validate_spec`, `spec_schema`, `audit`, `run`,
+  `estimate`, `list_jobs`, `show_job`, `report_path`. Tools run the real CLI, so the audit and the
+  test-once rule apply to agents too. Paid cloud jobs need `TEMPERA_MCP_ALLOW_CLOUD=1`.
+
 ## [0.1.0] - 2026-11-19
 
 First public preview. Tabular ML end to end, on your machine or on your own machines over SSH.

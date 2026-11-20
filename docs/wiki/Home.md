@@ -14,6 +14,7 @@
 - [Data Audit](Data-Audit.md): bias, leakage, quality; role of the SLM
 - [Algorithm Catalog](Algorithm-Catalog.md): algorithms × backends
 - [Execution and Machines](Execution-and-Machines.md): local, SSH/LAN, cloud, agent
+- [Agents (MCP)](Agents-MCP.md): using Têmpera from AI agents, with the same guardrails
 - [Cost and Estimation](Cost-and-Estimation.md): ETA, memory, cost, savings
 - [Contracts and Specifications](Contracts.md): `tempera.yaml`, gRPC, Arrow
 - [Security and Privacy](Security.md)
