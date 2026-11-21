@@ -639,6 +639,30 @@ mod tests {
         r.findings.iter().map(|f| f.id.as_str()).collect()
     }
 
+    /// #86: an integer 0/1 target must get class counts like a string target.
+    #[test]
+    fn imbalance_is_detected_for_numeric_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut csv = String::from("a,b,is_fraud\n");
+        for i in 0..4000u64 {
+            let h = i.wrapping_mul(2654435761) % 1000;
+            csv += &format!("{},{},{}\n", h, (h * 7) % 1000, u8::from(i % 200 == 0));
+        }
+        let src = tmp.path().join("fraud.csv");
+        std::fs::write(&src, csv).unwrap();
+        let ds = ingest(&src, tmp.path()).unwrap();
+        let profile = profile_dataset(&ds).unwrap();
+        let spec = JobSpec::from_yaml("version: 1\nname: t\ndata: { source: fraud.csv, target: is_fraud }\n")
+            .unwrap();
+        let inf = infer_task(&spec, &profile).unwrap();
+        assert_eq!(inf.task, TaskType::BinaryClassification);
+        let share = inf.minority_share.expect("class balance must be measured");
+        assert!((share - 0.005).abs() < 1e-9, "{share}");
+        assert_eq!(inf.metric, tempera_core::spec::Metric::PrAuc);
+        let r = audit(&ds, &spec, &profile, &inf).unwrap();
+        assert!(ids(&r).contains(&"A5"), "{:?}", ids(&r));
+    }
+
     #[test]
     fn detects_planted_problems() {
         let r = run("");
