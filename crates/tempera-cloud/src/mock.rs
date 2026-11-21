@@ -278,8 +278,12 @@ mod tests {
             offers[0].gpu_name, "RTX 4090",
             "cheapest GPU offer first (CPU-only filtered)"
         );
-        let a = m.launch(&offers[0], &BootSpec::for_job("j1", "k")).unwrap();
-        let b = m.launch(&offers[0], &BootSpec::for_job("j2", "k")).unwrap();
+        let a = m
+            .launch(&offers[0], &BootSpec::for_job("0000beef", "j1", "k"))
+            .unwrap();
+        let b = m
+            .launch(&offers[0], &BootSpec::for_job("0000beef", "j2", "k"))
+            .unwrap();
         assert_eq!(m.instances().unwrap().len(), 2);
         assert_eq!(m.status(&a).unwrap().state, InstanceState::Running);
         m.preempt(&a).unwrap();

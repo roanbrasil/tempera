@@ -267,8 +267,8 @@ mod tests {
         assert_eq!(q["reliability2"]["gte"], 0.98);
         assert_eq!(q["gpu_ram"]["gte"], 8.0 * 1024.0);
         let offers = parse_bundles(&fixture("vast_bundles.json"), true, 0).unwrap();
-        let body = rent_request(&offers[0], &BootSpec::for_job("j", "ssh-ed25519 K"));
-        assert_eq!(body["label"], "tempera-j");
+        let body = rent_request(&offers[0], &BootSpec::for_job("0000beef", "j", "ssh-ed25519 K"));
+        assert_eq!(body["label"], "tempera-0000beef-j");
         assert_eq!(body["price"], 0.09);
     }
 

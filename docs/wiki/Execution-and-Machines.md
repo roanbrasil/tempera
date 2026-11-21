@@ -160,15 +160,22 @@ budget:
    ranks them by `compute.objective` and prints the comparison with a one-line rationale. If this
    machine wins, nothing is rented. If the best estimate exceeds `budget.max_cost`, the job is
    refused before anything is rented.
-2. **Rents:** writes a lease, launches the offer with a throwaway SSH key (named `tempera-<job>`),
-   waits until SSH answers.
+2. **Rents:** writes a lease in the per-user rental ledger (`~/.local/state/tempera/rentals/`, one
+   file per rental, shared by all projects), launches the offer with a throwaway SSH key, named
+   `tempera-<owner>-<job>` where `<owner>` is this installation's id (`~/.local/state/tempera/owner`),
+   and waits until SSH answers. If the create call fails, the instance is looked up by name and
+   terminated in case it was created anyway.
 3. **Runs over SSH:** exactly the LAN-machine path (agent install, reverse tunnel, content-addressed
    data cache, results pulled back).
 4. **Watches:** every 15 s the spend is metered (alert at 80% of the budget, cancel at 100%); every
    minute the lease heartbeat is refreshed and a vanished (preempted) instance cancels the job.
-5. **Always terminates:** on success, on error, on cancel and on Ctrl-C. A killed process cannot
-   clean up, so the **reaper** (`tempera cloud reap`, and every 4 minutes under `tempera up`)
-   terminates any `tempera-*` instance without a fresh lease (TTL 10 min).
+5. **Terminates:** on success, on error, on cancel and on Ctrl-C. A killed process cannot clean
+   up, so the **reaper** (before every rental, `tempera cloud reap`, and every 4 minutes under
+   `tempera up`) terminates instances **of this owner** without a fresh lease (TTL 10 min).
+   Instances of other owners and hand-made ones are never touched; an unreadable ledger stops the
+   reaper instead of looking empty. Between reaper runs an orphan keeps billing: closing the
+   terminal or killing the process is not yet covered by a guarantee that runs without Têmpera
+   (#88).
 
 `Provider` trait (synchronous; called from `spawn_blocking`):
 

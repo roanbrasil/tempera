@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::{InstanceState, Provider, Result};
 
 pub const HEARTBEAT_S: u64 = 60;
-/// A lease without a heartbeat for this long is dead. With the reaper running
-/// every few minutes, a crash never leaves an instance up for more than ~15 min.
+/// A lease without a heartbeat for this long is dead. The reaper runs before every
+/// rental, every few minutes under `tempera up`, and on `tempera cloud reap`; between
+/// those, an orphan keeps billing (guarantees independent of a running Têmpera: #88).
 pub const LEASE_TTL_S: u64 = 10 * 60;
 
 /// Spending state of one job.
@@ -100,54 +101,103 @@ impl Lease {
     }
 }
 
-/// `<home>/cloud/leases.json`.
+/// The rental ledger: `<state>/rentals/<provider>__<instance>.json`, one file per rental.
+///
+/// It lives in the per-user state directory ([`crate::state_dir`]), not in a project's
+/// workspace, so every project of the user sees every rental. One file per rental means
+/// a heartbeat of one job can never overwrite the lease of another (#87); each write is
+/// a rename of a uniquely named temp file, so readers never see a torn lease.
 #[derive(Debug, Clone)]
 pub struct Leases {
-    path: PathBuf,
+    dir: PathBuf,
 }
 
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Leases {
-    pub fn new(home: &Path) -> Self {
+    pub fn new(state_dir: &Path) -> Self {
         Self {
-            path: home.join("cloud").join("leases.json"),
+            dir: state_dir.join("rentals"),
         }
     }
 
-    pub fn load(&self) -> Vec<Lease> {
-        std::fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+    fn file(&self, provider: &str, instance_name: &str) -> PathBuf {
+        let clean = |s: &str| {
+            s.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        };
+        self.dir
+            .join(format!("{}__{}.json", clean(provider), clean(instance_name)))
     }
 
-    fn save(&self, leases: &[Lease]) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)?;
+    /// Every lease. An unreadable or corrupt lease is an **error**, never "no lease":
+    /// the reaper must not terminate instances it cannot account for.
+    pub fn load(&self) -> Result<Vec<Lease>> {
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        let mut out = vec![];
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension().is_some_and(|x| x == "json") {
+                let text = std::fs::read_to_string(&path)?;
+                out.push(serde_json::from_str(&text).map_err(|e| {
+                    crate::CloudError::Refused(format!("corrupt rental record {}: {e}", path.display()))
+                })?);
+            }
         }
-        let tmp = self.path.with_extension(format!("tmp{}", std::process::id()));
-        std::fs::write(&tmp, serde_json::to_vec_pretty(leases)?)?;
-        std::fs::rename(tmp, &self.path)?;
+        out.sort_by(|a: &Lease, b: &Lease| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then(a.instance_name.cmp(&b.instance_name))
+        });
+        Ok(out)
+    }
+
+    fn write(&self, lease: &Lease) -> Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let path = self.file(&lease.provider, &lease.instance_name);
+        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = self.dir.join(format!(".{}.{seq}.tmp", std::process::id()));
+        std::fs::write(&tmp, serde_json::to_vec_pretty(lease)?)?;
+        std::fs::rename(tmp, path)?;
         Ok(())
     }
 
-    fn update(&self, f: impl FnOnce(&mut Vec<Lease>)) -> Result<()> {
-        let mut l = self.load();
-        f(&mut l);
-        self.save(&l)
+    fn get(&self, provider: &str, instance_name: &str) -> Result<Option<Lease>> {
+        match std::fs::read_to_string(self.file(provider, instance_name)) {
+            Ok(t) => Ok(Some(serde_json::from_str(&t)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn modify(&self, provider: &str, instance_name: &str, f: impl FnOnce(&mut Lease)) -> Result<()> {
+        if let Some(mut l) = self.get(provider, instance_name)? {
+            f(&mut l);
+            self.write(&l)?;
+        }
+        Ok(())
     }
 
     /// Records the intent to launch `instance_name` (before calling the provider).
     pub fn open(&self, provider: &str, instance_name: &str, job_id: &str, now: u64) -> Result<()> {
-        self.update(|l| {
-            l.retain(|x| !(x.provider == provider && x.instance_name == instance_name));
-            l.push(Lease {
-                provider: provider.to_owned(),
-                instance_id: String::new(),
-                instance_name: instance_name.to_owned(),
-                job_id: job_id.to_owned(),
-                created_at: now,
-                heartbeat_at: now,
-            });
+        self.write(&Lease {
+            provider: provider.to_owned(),
+            instance_id: String::new(),
+            instance_name: instance_name.to_owned(),
+            job_id: job_id.to_owned(),
+            created_at: now,
+            heartbeat_at: now,
         })
     }
 
@@ -158,30 +208,21 @@ impl Leases {
         instance_id: &str,
         now: u64,
     ) -> Result<()> {
-        self.update(|l| {
-            for x in l
-                .iter_mut()
-                .filter(|x| x.provider == provider && x.instance_name == instance_name)
-            {
-                instance_id.clone_into(&mut x.instance_id);
-                x.heartbeat_at = now;
-            }
+        self.modify(provider, instance_name, |x| {
+            instance_id.clone_into(&mut x.instance_id);
+            x.heartbeat_at = now;
         })
     }
 
     pub fn heartbeat(&self, provider: &str, instance_name: &str, now: u64) -> Result<()> {
-        self.update(|l| {
-            for x in l
-                .iter_mut()
-                .filter(|x| x.provider == provider && x.instance_name == instance_name)
-            {
-                x.heartbeat_at = now;
-            }
-        })
+        self.modify(provider, instance_name, |x| x.heartbeat_at = now)
     }
 
     pub fn close(&self, provider: &str, instance_name: &str) -> Result<()> {
-        self.update(|l| l.retain(|x| !(x.provider == provider && x.instance_name == instance_name)))
+        match std::fs::remove_file(self.file(provider, instance_name)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -196,18 +237,33 @@ pub struct ReapReport {
     pub kept: usize,
     /// Dead leases removed.
     pub pruned_leases: usize,
+    /// Têmpera-named instances of another owner (left alone).
+    #[serde(default)]
+    pub foreign: usize,
 }
 
-/// Terminates every [`crate::TAG`]-named instance of `provider` without a
+/// Terminates every instance **of this owner** (named `tempera-<owner>-…`) without a
 /// fresh lease, and drops leases that are stale or whose instance is gone.
-pub fn reap(provider: &dyn Provider, leases: &Leases, now: u64, ttl_s: u64) -> Result<ReapReport> {
-    let all = leases.load();
+///
+/// Fails closed: if the ledger cannot be read, nothing is terminated.
+pub fn reap(
+    provider: &dyn Provider,
+    leases: &Leases,
+    owner: &str,
+    now: u64,
+    ttl_s: u64,
+) -> Result<ReapReport> {
+    let all = leases.load()?;
     let mine: Vec<&Lease> = all.iter().filter(|l| l.provider == provider.name()).collect();
     let mut report = ReapReport::default();
     let instances = provider.instances()?;
+    report.foreign = instances
+        .iter()
+        .filter(|i| i.is_tempera() && !i.is_owned_by(owner) && i.state != InstanceState::Gone)
+        .count();
     for inst in instances
         .iter()
-        .filter(|i| i.is_tempera() && i.state != InstanceState::Gone)
+        .filter(|i| i.is_owned_by(owner) && i.state != InstanceState::Gone)
     {
         let alive = mine.iter().any(|l| {
             l.is_fresh(now, ttl_s)
@@ -232,15 +288,14 @@ pub fn reap(provider: &dyn Provider, leases: &Leases, now: u64, ttl_s: u64) -> R
         .filter(|i| i.state != InstanceState::Gone)
         .map(|i| i.name.as_str())
         .collect();
-    let before = all.len();
-    leases.update(|l| {
-        l.retain(|x| {
-            x.provider != provider.name()
-                || (x.is_fresh(now, ttl_s)
-                    && (x.instance_id.is_empty() || live_names.contains(&x.instance_name.as_str())))
-        });
-    })?;
-    report.pruned_leases = before.saturating_sub(leases.load().len());
+    for l in mine {
+        let dead = !l.is_fresh(now, ttl_s)
+            || (!l.instance_id.is_empty() && !live_names.contains(&l.instance_name.as_str()));
+        if dead {
+            leases.close(&l.provider, &l.instance_name)?;
+            report.pruned_leases += 1;
+        }
+    }
     Ok(report)
 }
 
@@ -268,6 +323,8 @@ mod tests {
         ));
     }
 
+    const ME: &str = "0000beef";
+
     #[test]
     fn reaper_kills_only_orphans() {
         let home = tempfile::tempdir().unwrap();
@@ -276,31 +333,109 @@ mod tests {
         let offer = p.list_offers(&ResourceRequest::default()).unwrap().remove(0);
 
         // Job A: healthy lease. Job B: server crashed long ago. C: not ours.
-        let a = BootSpec::for_job("a", "k");
+        let a = BootSpec::for_job(ME, "a", "k");
         leases.open("mock", &a.name, "a", 1000).unwrap();
         let ia = p.launch(&offer, &a).unwrap();
         leases.set_instance("mock", &a.name, &ia, 1000).unwrap();
-        let b = BootSpec::for_job("b", "k");
+        let b = BootSpec::for_job(ME, "b", "k");
         leases.open("mock", &b.name, "b", 0).unwrap();
         p.launch(&offer, &b).unwrap();
-        let mut c = BootSpec::for_job("c", "k");
+        let mut c = BootSpec::for_job(ME, "c", "k");
         c.name = "someone-elses-pod".into();
         p.launch(&offer, &c).unwrap();
-        // An instance with our tag and no lease at all (crash between launch and lease).
-        p.launch(&offer, &BootSpec::for_job("d", "k")).unwrap();
+        // An instance with our name and no lease at all (crash between launch and lease).
+        p.launch(&offer, &BootSpec::for_job(ME, "d", "k")).unwrap();
 
-        let r = reap(&p, &leases, 1000 + 60, LEASE_TTL_S).unwrap();
+        let r = reap(&p, &leases, ME, 1000 + 60, LEASE_TTL_S).unwrap();
         let names: Vec<&str> = r.terminated.iter().map(|(_, n)| n.as_str()).collect();
-        assert_eq!(names, ["tempera-b", "tempera-d"]);
+        assert_eq!(names, ["tempera-0000beef-b", "tempera-0000beef-d"]);
         assert_eq!(r.kept, 1);
         assert_eq!(r.pruned_leases, 1, "b's stale lease is dropped");
         let left: Vec<String> = p.instances().unwrap().into_iter().map(|i| i.name).collect();
-        assert_eq!(left, ["tempera-a", "someone-elses-pod"]);
+        assert_eq!(left, ["tempera-0000beef-a", "someone-elses-pod"]);
 
         // A's heartbeat stops: the next pass reaps it too.
-        let r = reap(&p, &leases, 1000 + LEASE_TTL_S + 61, LEASE_TTL_S).unwrap();
+        let r = reap(&p, &leases, ME, 1000 + LEASE_TTL_S + 61, LEASE_TTL_S).unwrap();
         assert_eq!(r.terminated.len(), 1);
-        assert!(leases.load().is_empty());
+        assert!(leases.load().unwrap().is_empty());
+    }
+
+    /// #87: two projects (or a teammate) sharing one provider account never reap each other.
+    #[test]
+    fn reaper_leaves_other_owners_and_hand_made_instances_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Mock::with_state(tmp.path().join("mock.json"));
+        let offer = p.list_offers(&ResourceRequest::default()).unwrap().remove(0);
+        let (mine, theirs) = (
+            Leases::new(&tmp.path().join("me")),
+            Leases::new(&tmp.path().join("them")),
+        );
+
+        let other = BootSpec::for_job("cafe0001", "training", "k");
+        theirs.open("mock", &other.name, "training", 1000).unwrap();
+        p.launch(&offer, &other).unwrap();
+        for name in ["tempera-dev", "temperature-sweep", "tempera-legacy-job"] {
+            let mut b = BootSpec::for_job(ME, "x", "k");
+            b.name = name.into();
+            p.launch(&offer, &b).unwrap();
+        }
+
+        let r = reap(&p, &mine, ME, 1000, LEASE_TTL_S).unwrap();
+        assert!(r.terminated.is_empty(), "{r:?}");
+        assert_eq!(r.foreign, 3, "tempera-* of other owners are counted, not touched");
+        assert_eq!(p.instances().unwrap().len(), 4);
+    }
+
+    /// An unreadable ledger must stop the reaper, not look like "no leases".
+    #[test]
+    fn corrupt_ledger_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Mock::with_state(tmp.path().join("mock.json"));
+        let offer = p.list_offers(&ResourceRequest::default()).unwrap().remove(0);
+        let leases = Leases::new(tmp.path());
+        let a = BootSpec::for_job(ME, "a", "k");
+        leases.open("mock", &a.name, "a", 1000).unwrap();
+        p.launch(&offer, &a).unwrap();
+        std::fs::write(
+            tmp.path().join("rentals").join("mock__tempera-0000beef-zz.json"),
+            "{torn",
+        )
+        .unwrap();
+
+        assert!(reap(&p, &leases, ME, 1000, LEASE_TTL_S).is_err());
+        assert_eq!(p.instances().unwrap().len(), 1, "nothing may be terminated");
+    }
+
+    /// Heartbeats of many jobs at once lose no lease (one file per rental).
+    #[test]
+    fn concurrent_writers_lose_no_lease() {
+        let tmp = tempfile::tempdir().unwrap();
+        let leases = Leases::new(tmp.path());
+        std::thread::scope(|s| {
+            for t in 0..16 {
+                let l = leases.clone();
+                s.spawn(move || {
+                    let name = format!("tempera-{ME}-job{t}");
+                    l.open("mock", &name, &format!("job{t}"), 1).unwrap();
+                    for now in 2..30 {
+                        l.heartbeat("mock", &name, now).unwrap();
+                    }
+                });
+            }
+        });
+        let all = leases.load().unwrap();
+        assert_eq!(all.len(), 16);
+        assert!(all.iter().all(|l| l.heartbeat_at == 29));
+    }
+
+    #[test]
+    fn owner_id_is_created_once_and_validated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = crate::owner_id(tmp.path()).unwrap();
+        assert_eq!(a.len(), 8);
+        assert_eq!(crate::owner_id(tmp.path()).unwrap(), a);
+        std::fs::write(tmp.path().join("owner"), "nope").unwrap();
+        assert!(crate::owner_id(tmp.path()).is_err());
     }
 
     #[test]
@@ -310,9 +445,10 @@ mod tests {
         l.open("mock", "tempera-x", "x", 10).unwrap();
         l.set_instance("mock", "tempera-x", "id-1", 20).unwrap();
         l.heartbeat("mock", "tempera-x", 30).unwrap();
-        let v = l.load();
+        let v = l.load().unwrap();
         assert_eq!((v[0].instance_id.as_str(), v[0].heartbeat_at), ("id-1", 30));
         l.close("mock", "tempera-x").unwrap();
-        assert!(l.load().is_empty());
+        assert!(l.load().unwrap().is_empty());
+        l.close("mock", "tempera-x").unwrap();
     }
 }

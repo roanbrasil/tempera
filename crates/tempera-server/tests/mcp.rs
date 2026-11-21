@@ -28,6 +28,7 @@ impl Client {
         cmd.arg("mcp")
             .current_dir(home)
             .env("TEMPERA_HOME", home.join(".tempera"))
+            .env("TEMPERA_STATE_DIR", home.join(".state"))
             .env("TEMPERA_NUM_THREADS", "2")
             .env("TEMPERA_ADVISOR", "off")
             .env_remove("TEMPERA_MCP_ALLOW_CLOUD")

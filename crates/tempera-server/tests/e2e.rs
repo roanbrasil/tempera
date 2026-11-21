@@ -35,6 +35,7 @@ fn tempera(home: &Path, args: &[&str]) -> std::process::Output {
         .args(args)
         .current_dir(repo().join("examples"))
         .env("TEMPERA_HOME", home)
+        .env("TEMPERA_STATE_DIR", home.join("state"))
         .env("TEMPERA_AGENT_BIN", agent_bin())
         .env("TEMPERA_NUM_THREADS", "2")
         .env("NO_COLOR", "1")
@@ -193,6 +194,7 @@ fn tempera_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process
     c.args(args)
         .current_dir(repo().join("examples"))
         .env("TEMPERA_HOME", home)
+        .env("TEMPERA_STATE_DIR", home.join("state"))
         .env("TEMPERA_AGENT_BIN", agent_bin())
         .env("TEMPERA_NUM_THREADS", "2")
         .env("NO_COLOR", "1")
@@ -300,8 +302,19 @@ fn cloud_job_end_to_end_on_mock_docker() {
     assert_eq!(insts.len(), 1);
     assert_eq!(insts[0]["state"], "gone");
     assert!(insts[0]["container"].is_null());
-    let leases = std::fs::read_to_string(tmp.path().join("cloud/leases.json")).unwrap();
-    assert_eq!(leases.trim(), "[]");
+    // Rental ledger (per-user state dir, one file per rental): nothing left open.
+    let open: Vec<_> = std::fs::read_dir(tmp.path().join("state/rentals"))
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    assert!(open.is_empty(), "{open:?}");
+    // The instance carried this installation's owner id.
+    let owner = std::fs::read_to_string(tmp.path().join("state/owner")).unwrap();
+    assert!(
+        insts[0]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("tempera-{}-", owner.trim()))
+    );
 
     let report = std::fs::read_dir(tmp.path().join("jobs"))
         .unwrap()

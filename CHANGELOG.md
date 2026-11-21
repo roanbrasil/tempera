@@ -15,6 +15,20 @@ minor versions may break the spec format or the CLI.
   I/O, which Têmpera never uses) are ignored with a reason, and "unmaintained" advisories fail
   only for direct dependencies (the flagged ones come from polars/arrow).
 
+### Fixed
+
+- Cloud reaper (#87): it terminated every `tempera*`-named instance without a lease in the
+  *current project's* `.tempera/cloud/leases.json`, so a job started from another project, a
+  teammate on the same account, or a hand-made `tempera-dev` pod could be killed mid-run. Rentals
+  now live in a per-user ledger (`~/.local/state/tempera/rentals/`, one file per rental; override
+  with `TEMPERA_STATE_DIR`), instances are named `tempera-<owner>-<job>`, and the reaper only
+  touches its own owner's instances and stops if the ledger cannot be read. **Upgrade note:**
+  instances named `tempera-<job>` by 0.1.0 are no longer reaped automatically; `tempera cloud
+  instances` lists them as "another owner" so you can terminate them by hand.
+- Splits deduplicate source rows, not projected features (#85); class balance is measured for
+  numeric targets (#86); sensitive attributes are not model features unless opted in (#91);
+  the SLM advisor's locality check parses the URL and refuses userinfo and redirects (#74).
+
 ### Added
 
 - `tempera traces finetune` (#47): audit → group split → LoRA/QLoRA fine-tuning of a chat LLM
