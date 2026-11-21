@@ -162,9 +162,15 @@ fn recommend_metric(task: TaskType, col: &ColumnProfile, minority: Option<f64>) 
                     m * 100.0
                 ),
             ),
-            _ => (
+            Some(_) => (
                 Metric::RocAuc,
                 "Classes are reasonably balanced → ROC-AUC (threshold-independent ranking quality)."
+                    .to_owned(),
+            ),
+            // Never claim balance that was not measured (#86).
+            None => (
+                Metric::RocAuc,
+                "Class balance could not be measured → ROC-AUC; check the class counts in the profile."
                     .to_owned(),
             ),
         },
@@ -176,9 +182,16 @@ fn recommend_metric(task: TaskType, col: &ColumnProfile, minority: Option<f64>) 
                     m * 100.0
                 ),
             ),
-            _ => (
+            Some(_) => (
                 Metric::BalancedAccuracy,
                 "Multiclass → balanced accuracy.".to_owned(),
+            ),
+            None => (
+                Metric::BalancedAccuracy,
+                format!(
+                    "Multiclass with more than {} classes: class balance not measured → balanced accuracy, which weighs every class equally.",
+                    crate::profile::ALL_VALUES_UP_TO
+                ),
             ),
         },
         TaskType::Regression => {

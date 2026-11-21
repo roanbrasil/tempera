@@ -12,8 +12,12 @@ use crate::error::Result;
 use crate::ingest::Dataset;
 
 /// Bump when the profile format or semantics change.
-pub const PROFILE_VERSION: u32 = 2;
+pub const PROFILE_VERSION: u32 = 3;
 const TOP_K: usize = 10;
+/// Columns with at most this many distinct values get the count of *every* value
+/// (numeric ones too), so class balance is exact for any classification target that
+/// fits (#86). Wider columns keep only the top `TOP_K`.
+pub const ALL_VALUES_UP_TO: u64 = 50;
 const HIST_BINS: usize = 10;
 const SAMPLE_ROWS: usize = 5;
 /// Above this many rows, distribution details come from a uniform sample.
@@ -280,16 +284,20 @@ pub fn profile_series(s: &Series) -> Result<ColumnProfile> {
     };
 
     if n_unique <= 1 {
-        p.top_values = top_values(s)?;
+        p.top_values = top_values(s, n_unique)?;
         return Ok(p);
     }
 
     if dtype.is_bool() {
         p.kind = ColumnKind::Boolean;
-        p.top_values = top_values(s)?;
+        p.top_values = top_values(s, n_unique)?;
     } else if dtype.is_primitive_numeric() {
         p.kind = ColumnKind::Numeric;
         p.numeric = numeric_stats(s)?;
+        // A 0/1 or small-integer column may be a classification target: keep exact counts.
+        if n_unique <= ALL_VALUES_UP_TO {
+            p.top_values = top_values(s, n_unique)?;
+        }
     } else if dtype.is_temporal() {
         p.kind = ColumnKind::Datetime;
         let as_str = s.cast(&DataType::String)?;
@@ -310,7 +318,7 @@ pub fn profile_series(s: &Series) -> Result<ColumnProfile> {
             total as f64 / count as f64
         };
         p.mean_length = Some(mean_len);
-        p.top_values = top_values(&st)?;
+        p.top_values = top_values(&st, n_unique)?;
         p.kind = classify_string(n_unique, non_null, mean_len);
     } else {
         // Nested or unusual types: treat as text so they are not used as features.
@@ -375,7 +383,12 @@ fn numeric_stats(s: &Series) -> Result<Option<NumericStats>> {
     }))
 }
 
-fn top_values(s: &Series) -> Result<Vec<ValueCount>> {
+fn top_values(s: &Series, n_unique: u64) -> Result<Vec<ValueCount>> {
+    let keep = if n_unique <= ALL_VALUES_UP_TO {
+        ALL_VALUES_UP_TO as usize
+    } else {
+        TOP_K
+    };
     let st = s.cast(&DataType::String)?.drop_nulls();
     let counts = st.value_counts(true, false, "count".into(), false)?;
     let values = counts.column(st.name().as_str())?.str()?.clone();
@@ -384,7 +397,7 @@ fn top_values(s: &Series) -> Result<Vec<ValueCount>> {
     Ok(values
         .iter()
         .zip(n.iter())
-        .take(TOP_K)
+        .take(keep)
         .filter_map(|(v, c)| {
             Some(ValueCount {
                 value: v?.to_owned(),
