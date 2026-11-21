@@ -349,3 +349,36 @@ odds (difference and ratio), equal opportunity and accuracy differences. Multicl
 Regression: `mae`, `rmse`, `mean_prediction`, `mean_truth`. Null group values form `"(missing)"`; groups
 under 30 rows are flagged `small`. Model-ready splits carry sensitive attributes as `__sens__<name>`
 (never features).
+
+## 11. LLM fine-tuning (`finetune`, #47)
+
+`python -m tempera_worker finetune --manifest M` (`llm` extra: torch, transformers, peft,
+bitsandbytes). Written by `tempera traces finetune`; same exit codes as §7 (3 = stopped, adapter
+checkpoint saved).
+
+```json
+{"base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+ "train": ".../data/train.jsonl", "valid": ".../data/valid.jsonl", "test": ".../data/test.jsonl",
+ "work_dir": ".../work", "model_dir": ".../model", "seed": 42, "resume_from": null,
+ "params": {"r": 16, "alpha": 32, "dropout": 0.05, "target_modules": "all-linear",
+            "learning_rate": 2e-4, "weight_decay": 0.0, "warmup_ratio": 0.03, "epochs": 1.0,
+            "max_steps": 0, "batch_size": 1, "grad_accum": 8, "max_len": 2048,
+            "quantization": "auto", "gradient_checkpointing": true, "eval_every": 50,
+            "eval_samples": 64, "max_new_tokens": 160}}
+```
+
+Unknown `params` keys are a manifest error (exit 2). `valid` and `test` are optional; the held-out
+set for the baseline and the final score is `test`, else `valid`.
+
+**Data lines**: `{"id", "messages": [{"role": "system|user|assistant|tool", "content",
+"tool_calls": [{"name", "arguments": {...}}]}], "tools": [{"name", "parameters"}]}`. OpenAI chat
+(`tool_calls[].function` with string `arguments`, `tools[].function`) is accepted too.
+
+**Events**: `eval/base_perplexity` and `eval/base_{tool_call_rate, valid_call_rate,
+tool_name_accuracy, exact_match}` before training; `train/loss` and `train/lr` per optimizer step;
+`valid/loss`, `valid/perplexity` every `eval_every` steps and at the end; `eval/perplexity` and
+`eval/<metric>` after training. Artifacts: `report` (`samples.jsonl`) and `model` with format
+`safetensors` (the adapter directory). The `done` summary holds `base_<metric>` and `<metric>`.
+
+**`model.json`**: `{"algorithm": "llm_lora", "task": "llm_fine_tune", "base_model": {"name",
+"revision" | "config_sha256"}, "mode", "steps", "params", "seed", "metrics", "adapter": "adapter"}`.

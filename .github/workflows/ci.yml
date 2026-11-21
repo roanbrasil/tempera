@@ -75,6 +75,24 @@ jobs:
       - run: uv run pyright
       - run: uv run pytest -q
 
+  python-llm:
+    name: Python worker LLM fine-tuning (CPU)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workers/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: workers/python/uv.lock
+      - run: uv sync --locked
+      # CPU wheels of torch (the locked `llm` extra pulls the CUDA build, several GB). A tiny random
+      # model is built inside the tests, so nothing is downloaded from the Hugging Face Hub.
+      - run: uv pip install --torch-backend cpu "torch>=2.5" "transformers>=4.46" "peft>=0.13" "accelerate>=1.0" "safetensors>=0.4"
+      - run: uv run --no-sync pytest -q tests/test_llm.py -m "not gpu"
+
   ui:
     name: Web UI (check, lint, test, build)
     runs-on: ubuntu-latest

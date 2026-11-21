@@ -79,6 +79,19 @@ Then `compute: { allow: [runpod, local] }` and a `budget.max_cost` in USD. Têmp
 cheapest machine that fits, runs the job over SSH and always terminates it. See
 [Execution and Machines](docs/wiki/Execution-and-Machines.md#cloud-gpu-via-api-key).
 
+### Fine-tune a small LLM on agent traces
+
+```bash
+uv sync --project workers/python --extra llm
+tempera traces finetune examples/data/agent_traces_clean.jsonl --base Qwen/Qwen2.5-0.5B-Instruct
+```
+
+The trace audit runs first and blocks on red findings. Then the traces are split by task, a LoRA
+adapter is trained (4-bit QLoRA on an NVIDIA GPU; a 10 GB card is enough for 1–4B models), and the
+untuned base model and the adapter are scored on the same held-out conversations: perplexity,
+well-formed tool calls, right tool, exact arguments. See
+[LLM Fine-Tuning](docs/wiki/Fine-Tuning.md).
+
 ### From an AI agent (MCP)
 
 `tempera mcp` is an [MCP](https://modelcontextprotocol.io) server on stdio, so Claude Code,
@@ -192,6 +205,7 @@ The documentation lives in [`docs/wiki`](docs/wiki/Home.md), mirrored to the Git
 | [Algorithm Catalog](docs/wiki/Algorithm-Catalog.md) | What is supported, and on which backend |
 | [Execution and Machines](docs/wiki/Execution-and-Machines.md) | Local, SSH/LAN, cloud, agent, checkpointing |
 | [Agent Traces](docs/wiki/Agent-Traces.md) | Auditing chat/tool-call data before LLM fine-tuning |
+| [LLM Fine-Tuning](docs/wiki/Fine-Tuning.md) | LoRA/QLoRA on agent traces, baseline first |
 | [Agents (MCP)](docs/wiki/Agents-MCP.md) | Using Têmpera from AI agents, tools and guardrails |
 | [Cost and Estimation](docs/wiki/Cost-and-Estimation.md) | ETA, memory, cost, savings strategies |
 | [Contracts and Specifications](docs/wiki/Contracts.md) | `tempera.yaml`, protobuf, Arrow layout |

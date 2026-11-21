@@ -43,7 +43,7 @@ def run_cli(*args: str, timeout: float = 300) -> subprocess.CompletedProcess[str
 
 
 def run_manifest(
-    command: str, manifest: dict[str, Any], path: Path
+    command: str, manifest: dict[str, Any], path: Path, timeout: float = 300
 ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, Any]]]:
-    proc = run_cli(command, "--manifest", str(write_manifest(path, manifest)))
+    proc = run_cli(command, "--manifest", str(write_manifest(path, manifest)), timeout=timeout)
     return proc, validate_lines(proc.stdout)

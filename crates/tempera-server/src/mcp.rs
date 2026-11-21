@@ -173,6 +173,16 @@ fn tools() -> Value {
                               "description": "Benchmarks you will report on, as NAME=prompts.jsonl" } },
               "required": ["data"] },
           "annotations": { "readOnlyHint": true } },
+        { "name": "finetune_traces", "description": "Fine-tune a small chat LLM on agent traces with LoRA/QLoRA on this machine's GPU (free, never rents cloud machines). Runs the trace audit first and stops BLOCKED on red findings; measures the untuned base model on the same held-out conversations and returns base → tuned (perplexity, tool-call accuracy). Can take many minutes; use dry_run to only prepare the data.",
+          "inputSchema": { "type": "object", "properties": {
+              "data": { "type": "string", "description": "Path to the JSONL file" },
+              "base_model": { "type": "string", "description": "Hugging Face id or local directory of an instruct model, e.g. Qwen/Qwen2.5-0.5B-Instruct" },
+              "max_steps": { "type": "integer", "minimum": 1, "description": "Cap on optimizer steps" },
+              "quantization": { "type": "string", "enum": ["auto", "nf4", "none"] },
+              "benchmarks": { "type": "array", "items": { "type": "string" },
+                              "description": "Benchmarks you will report on, as NAME=prompts.jsonl" },
+              "dry_run": { "type": "boolean", "description": "Prepare split and manifest without training" } },
+              "required": ["data", "base_model"] } },
         { "name": "list_jobs", "description": "Recent jobs with status, task and metric.",
           "inputSchema": { "type": "object", "properties": {
               "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
@@ -237,17 +247,32 @@ fn call(name: &str, args: &Value, cli: &dyn Cli, allow_cloud: bool) -> Result<Va
         "estimate" => vec!["cloud".into(), "estimate".into(), str_arg(args, "spec")?],
         "audit_traces" => {
             let mut v = vec!["traces".into(), "audit".into(), str_arg(args, "data")?];
-            for b in args
-                .get("benchmarks")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                let b = b
-                    .as_str()
-                    .filter(|b| b.contains('='))
-                    .ok_or_else(|| ToolError::Invalid("benchmarks must be NAME=FILE strings".into()))?;
-                v.extend(["--benchmark".into(), b.to_owned()]);
+            benchmark_args(args, &mut v)?;
+            v
+        }
+        // No `acknowledge` argument on purpose: only the user accepts a red finding.
+        "finetune_traces" => {
+            let mut v = vec![
+                "traces".into(),
+                "finetune".into(),
+                str_arg(args, "data")?,
+                "--base".into(),
+                str_arg(args, "base_model")?,
+            ];
+            benchmark_args(args, &mut v)?;
+            if let Some(n) = args.get("max_steps").and_then(Value::as_u64) {
+                v.extend(["--max-steps".into(), n.max(1).to_string()]);
+            }
+            if let Some(q) = opt_str(args, "quantization") {
+                if !["auto", "nf4", "none"].contains(&q.as_str()) {
+                    return Err(ToolError::Invalid(
+                        "quantization must be auto, nf4 or none".into(),
+                    ));
+                }
+                v.extend(["--quantization".into(), q]);
+            }
+            if args.get("dry_run").and_then(Value::as_bool) == Some(true) {
+                v.push("--dry-run".into());
             }
             v
         }
@@ -268,6 +293,22 @@ fn call(name: &str, args: &Value, cli: &dyn Cli, allow_cloud: bool) -> Result<Va
         _ => return Err(ToolError::Unknown),
     };
     Ok(cli_result(&cli.run(&argv)))
+}
+
+fn benchmark_args(args: &Value, v: &mut Vec<String>) -> Result<(), ToolError> {
+    for b in args
+        .get("benchmarks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let b = b
+            .as_str()
+            .filter(|b| b.contains('='))
+            .ok_or_else(|| ToolError::Invalid("benchmarks must be NAME=FILE strings".into()))?;
+        v.extend(["--benchmark".into(), b.to_owned()]);
+    }
+    Ok(())
 }
 
 /// Paid cloud providers in `compute.allow` (the free `mock` provider does not count).
@@ -416,7 +457,7 @@ mod tests {
         let f = Fake::new(0, "");
         let r = handle(&req("tools/list", json!({})), &f, false).unwrap();
         let tools = r["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 11);
+        assert_eq!(tools.len(), 12);
         for t in tools {
             assert!(t["name"].is_string() && t["description"].is_string());
             assert_eq!(t["inputSchema"]["type"], "object", "{t}");
@@ -450,6 +491,13 @@ mod tests {
             json!({ "data": "t.jsonl", "benchmarks": ["bfcl=b.jsonl"] }),
             false,
         );
+        call_tool(
+            &f,
+            "finetune_traces",
+            json!({ "data": "t.jsonl", "base_model": "Qwen/Q", "max_steps": 0,
+                    "quantization": "nf4", "dry_run": true, "acknowledge": ["T4"] }),
+            false,
+        );
         let s = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
         assert_eq!(
             f.calls(),
@@ -462,6 +510,19 @@ mod tests {
                 s(&["report"]),
                 s(&["cloud", "estimate", "a.yaml"]),
                 s(&["traces", "audit", "t.jsonl", "--benchmark", "bfcl=b.jsonl"]),
+                // `acknowledge` is ignored: an agent cannot accept a finding.
+                s(&[
+                    "traces",
+                    "finetune",
+                    "t.jsonl",
+                    "--base",
+                    "Qwen/Q",
+                    "--max-steps",
+                    "1",
+                    "--quantization",
+                    "nf4",
+                    "--dry-run",
+                ]),
             ]
         );
     }
@@ -536,6 +597,20 @@ mod tests {
             false,
         );
         assert_eq!(r["result"]["isError"], true);
+        assert!(f.calls().is_empty());
+    }
+
+    #[test]
+    fn finetune_traces_validates_arguments_before_running() {
+        let f = Fake::new(0, "");
+        for args in [
+            json!({ "data": "t.jsonl" }),
+            json!({ "data": "t.jsonl", "base_model": "m", "quantization": "int2" }),
+            json!({ "data": "t.jsonl", "base_model": "m", "benchmarks": ["x"] }),
+        ] {
+            let r = call_tool(&f, "finetune_traces", args, false);
+            assert_eq!(r["result"]["isError"], true, "{r}");
+        }
         assert!(f.calls().is_empty());
     }
 

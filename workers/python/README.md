@@ -13,7 +13,9 @@ uv run tempera-worker predict --manifest pred.json  # load a saved model, predic
 uv sync --extra tabular --extra quality              # + Cleanlab, Fairlearn
 uv run tempera-worker quality --manifest m.json     # suspected label errors (Data-Audit A7)
 uv run tempera-worker fairness --manifest m.json    # per-group metrics of test predictions (A8)
-uv run pytest                # tabular tests are skipped unless the extra is installed
+uv sync --extra llm                                  # + torch, transformers, peft, bitsandbytes
+uv run tempera-worker finetune --manifest ft.json   # LoRA/QLoRA on chat traces (Contracts §11)
+uv run pytest                # tests of a missing extra are skipped; `-m "not gpu"` skips the CUDA run
 ```
 
 Manifests, the model-ready Parquet layout, predictions and exit codes are specified in

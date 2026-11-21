@@ -434,6 +434,80 @@ pub fn profile_traces(set: &TraceSet) -> TraceProfile {
     }
 }
 
+/// Removes every `open … close` block (an unterminated block runs to the end).
+fn strip_blocks(text: &str, open: &str, close: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(open) {
+        out.push_str(&rest[..i]);
+        match rest[i + open.len()..].find(close) {
+            Some(j) => rest = &rest[i + open.len() + j + close.len()..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
+}
+
+/// Why a conversation cannot be used to train tool use, if it cannot (#47): a tool call
+/// that does not parse, or nothing for the model to learn.
+pub fn untrainable(c: &Conversation) -> Option<&'static str> {
+    if c.messages.iter().any(|m| !m.broken_calls.is_empty()) {
+        return Some("malformed tool call");
+    }
+    if c.tool_calls().any(|t| t.arguments.is_none()) {
+        return Some("tool-call arguments are not JSON");
+    }
+    if !c.messages.iter().any(|m| m.role == Role::Assistant) {
+        return Some("no assistant turn");
+    }
+    None
+}
+
+/// One conversation as a training record for `tempera-worker finetune` (#47): OpenAI-style
+/// roles, tool calls as `{name, arguments}` objects and tools as `{name, parameters}`. The
+/// `<tool_call>` / `<tools>` markup of ShareGPT/Hermes text is removed, because the chat
+/// template of the base model renders calls and tools in that model's own format.
+pub fn training_record(c: &Conversation) -> Value {
+    let role = |r: Role| match r {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::Tool => "tool",
+    };
+    let messages: Vec<Value> = c
+        .messages
+        .iter()
+        .map(|m| {
+            let content = match (c.format, m.role) {
+                (TraceFormat::ShareGpt, Role::Assistant) => {
+                    strip_blocks(&m.content, "<tool_call>", "</tool_call>")
+                }
+                (TraceFormat::ShareGpt, Role::System) => strip_blocks(&m.content, "<tools>", "</tools>"),
+                _ => m.content.clone(),
+            };
+            let mut v = serde_json::json!({ "role": role(m.role), "content": content });
+            if !m.tool_calls.is_empty() {
+                v["tool_calls"] = m
+                    .tool_calls
+                    .iter()
+                    .map(|t| serde_json::json!({ "name": t.name, "arguments": t.arguments.clone().unwrap_or(Value::Null) }))
+                    .collect();
+            }
+            v
+        })
+        .collect();
+    serde_json::json!({
+        "id": c.id,
+        "group": c.group,
+        "messages": messages,
+        "tools": c.tools.iter().map(|t| serde_json::json!({ "name": t.name, "parameters": t.parameters })).collect::<Vec<_>>(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -555,5 +629,44 @@ mod tests {
         assert_eq!(prof.declared_tools, 2);
         assert_eq!(prof.formats["openai"], 1);
         assert!(read_traces(&tmp.path().join("missing.jsonl")).is_err());
+    }
+    #[test]
+    fn training_records_strip_hermes_markup_and_keep_structured_calls() {
+        let line = r#"{"id":"h1","conversations":[{"from":"system","value":"Be brief. <tools>[{\"name\":\"get_weather\",\"parameters\":{\"type\":\"object\"}}]</tools>"},{"from":"human","value":"Recife?"},{"from":"gpt","value":"Checking. <tool_call>{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Recife\"}}</tool_call>"},{"from":"tool","value":"31C"},{"from":"gpt","value":"31C."}]}"#;
+        let c = parse_line(line, 1).unwrap();
+        assert_eq!(untrainable(&c), None);
+        let r = training_record(&c);
+        assert_eq!(r["messages"][0]["content"], "Be brief.");
+        assert_eq!(r["messages"][2]["content"], "Checking.");
+        assert_eq!(r["messages"][2]["tool_calls"][0]["name"], "get_weather");
+        assert_eq!(r["messages"][2]["tool_calls"][0]["arguments"]["city"], "Recife");
+        assert_eq!(r["messages"][3]["role"], "tool");
+        assert_eq!(r["tools"][0]["name"], "get_weather");
+        assert!(r["messages"][4].get("tool_calls").is_none());
+
+        // OpenAI text is kept verbatim.
+        let o = training_record(&parse_line(OPENAI, 1).unwrap());
+        assert_eq!(o["messages"][2]["tool_calls"][0]["arguments"]["city"], "Recife");
+        assert_eq!(o["messages"][4]["content"], "It is 31C.");
+    }
+
+    #[test]
+    fn untrainable_conversations_are_named() {
+        let broken = r#"{"messages":[{"role":"user","content":"x"},{"role":"assistant","content":"<tool_call>{nope</tool_call>"}]}"#;
+        assert_eq!(
+            untrainable(&parse_line(broken, 1).unwrap()),
+            Some("malformed tool call")
+        );
+        let bad_args = r#"{"messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"function":{"name":"f","arguments":"{bad"}}]}]}"#;
+        assert_eq!(
+            untrainable(&parse_line(bad_args, 1).unwrap()),
+            Some("tool-call arguments are not JSON")
+        );
+        let no_answer = r#"{"messages":[{"role":"user","content":"x"}]}"#;
+        assert_eq!(
+            untrainable(&parse_line(no_answer, 1).unwrap()),
+            Some("no assistant turn")
+        );
+        assert_eq!(strip_blocks("a <t>x</t> b <t>y", "<t>", "</t>"), "a  b");
     }
 }

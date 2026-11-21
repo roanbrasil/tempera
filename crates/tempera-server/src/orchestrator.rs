@@ -1308,7 +1308,7 @@ fn abs(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-fn new_job_id(name: &str) -> String {
+pub(crate) fn new_job_id(name: &str) -> String {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())

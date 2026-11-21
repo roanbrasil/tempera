@@ -15,6 +15,7 @@
 - [Algorithm Catalog](Algorithm-Catalog.md): algorithms × backends
 - [Execution and Machines](Execution-and-Machines.md): local, SSH/LAN, cloud, agent
 - [Agent Traces](Agent-Traces.md): auditing chat/tool-call data before LLM fine-tuning
+- [LLM Fine-Tuning](Fine-Tuning.md): LoRA/QLoRA on agent traces, baseline first, on your own GPU
 - [Agents (MCP)](Agents-MCP.md): using Têmpera from AI agents, with the same guardrails
 - [Cost and Estimation](Cost-and-Estimation.md): ETA, memory, cost, savings
 - [Contracts and Specifications](Contracts.md): `tempera.yaml`, gRPC, Arrow

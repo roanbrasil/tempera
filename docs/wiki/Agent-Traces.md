@@ -47,6 +47,9 @@ addresses, broken and mistyped tool calls, prompts re-logged under new ids, and 
 
 From an agent, the MCP tool `audit_traces` runs the same command.
 
+Once the audit passes, `tempera traces finetune` trains on the same split: see
+[LLM Fine-Tuning](Fine-Tuning.md).
+
 ## References
 
 See [the literature review](../research/agents-and-m5-literature.md), topics 1–4.

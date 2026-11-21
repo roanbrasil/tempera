@@ -1,7 +1,8 @@
 """`python -m tempera_worker fit|predict|quality|fairness --manifest PATH`: entry point the agent invokes.
 
 Contract: docs/wiki/Contracts.md, sections 7 (supervised) and 8 (clustering, anomaly detection);
-`quality` (label issues, Data-Audit A7) and `fairness` (Data-Audit A8) need the `quality` extra.
+`quality` (label issues, Data-Audit A7) and `fairness` (Data-Audit A8) need the `quality` extra;
+`finetune` (LoRA/QLoRA on chat traces, section 9) needs the `llm` extra.
 stdout carries only JSONL events (section 3); everything else (Python prints, native library output)
 is routed to stderr.
 
@@ -57,6 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     quality.add_argument("--manifest", type=Path, required=True)
     fairness = sub.add_parser("fairness", help="per-group fairness metrics of test predictions (Fairlearn)")
     fairness.add_argument("--manifest", type=Path, required=True)
+    finetune = sub.add_parser("finetune", help="LoRA/QLoRA fine-tuning of a chat LLM on agent traces")
+    finetune.add_argument("--manifest", type=Path, required=True)
     sub.add_parser("list", help="list available algorithms")
     return p
 
@@ -214,6 +217,26 @@ def run_fairness(m: FairnessManifest, events: EventSink) -> int:
     return fairness.run(m, events)
 
 
+LLM_HINT = "install the `llm` extra: uv sync --extra llm (or pip install 'tempera-worker[llm]')"
+
+
+def run_finetune(manifest: Path, events: EventSink) -> int:
+    try:
+        from tempera_worker.llm import finetune
+    except ImportError as e:
+        events.error(f"`finetune` needs torch, transformers and peft ({e}); {LLM_HINT}")
+        return EXIT_ERROR
+    m = finetune.load_manifest(manifest)
+    try:
+        import peft  # noqa: F401
+        import torch  # noqa: F401
+        import transformers  # noqa: F401
+    except ImportError as e:
+        events.error(f"`finetune` needs torch, transformers and peft ({e}); {LLM_HINT}")
+        return EXIT_ERROR
+    return finetune.run(m, events)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "list":
@@ -227,6 +250,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_fit(load_fit(args.manifest), events)
         if args.command == "quality":
             return run_quality(load_quality(args.manifest), events)
+        if args.command == "finetune":
+            return run_finetune(args.manifest, events)
         if args.command == "fairness":
             return run_fairness(load_fairness(args.manifest), events)
         return run_predict(load_predict(args.manifest), events)
