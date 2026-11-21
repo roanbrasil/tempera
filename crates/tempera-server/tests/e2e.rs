@@ -309,7 +309,12 @@ fn cloud_job_end_to_end_on_mock_docker() {
     assert!(open.is_empty(), "{open:?}");
     // The instance carried this installation's owner id.
     let owner = std::fs::read_to_string(tmp.path().join("state/owner")).unwrap();
-    assert!(insts[0]["name"].as_str().unwrap().starts_with(&format!("tempera-{}-", owner.trim())));
+    assert!(
+        insts[0]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("tempera-{}-", owner.trim()))
+    );
 
     let report = std::fs::read_dir(tmp.path().join("jobs"))
         .unwrap()
