@@ -44,8 +44,11 @@ one more user who should not be able to skip them.
 - **Red findings block.** `audit` and `run` return `BLOCKED` with the findings. The server's
   instructions ask the agent to show them to the user. No tool records a decision; dropping or
   accepting a column is an edit to `tempera.yaml` that the user should make or approve.
-- **Test set once.** Enforced in SQLite, so an agent cannot loop "retrain until the test score
-  improves".
+- **Test set once, per job.** Enforced in SQLite: within a job the test set is evaluated once.
+  Starting a *new* job on the same data gets a new evaluation, so an agent can still loop over
+  jobs; counting test evaluations per dataset and split is #71, and fine-tuning does not use the
+  claim yet (#93). An agent that can also write files can edit `tempera.yaml` and acknowledge
+  findings itself: the guardrail holds for agents confined to the MCP tools.
 - **No surprise spending.** `run` refuses a spec whose `compute.allow` lists a paid cloud
   provider (`runpod`, `vast`) unless the server was started with `TEMPERA_MCP_ALLOW_CLOUD=1`.
   `estimate` is always allowed. The budget cap (`budget.max_cost`) still applies when enabled.

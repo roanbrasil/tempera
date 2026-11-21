@@ -48,7 +48,7 @@ Existing tools cover **one or two** of these worlds:
 
 ## Differentiators
 
-1. **Audit before training.** Blocks or warns about leakage and bias; no AutoML tool does this as a mandatory step.
+1. **Audit before training.** Blocks on leakage and other red findings until a person decides. Among open-source AutoML tools we found none that makes this a blocking step; commercial platforms (DataRobot, H2O Driverless AI) detect leakage and drop features automatically. See [positioning and related work](../research/positioning-and-related-work.md).
 2. **Cost as a first-class metric.** Estimate before running, budget cap, actual cost at the end, and comparison across machines.
 3. **Any machine becomes a worker.** Local, LAN via SSH, or cloud, with the same flow.
 4. **Single binary.** The orchestrator and the agent run without a Python environment, which is only provisioned (with `uv`) when the job needs it.

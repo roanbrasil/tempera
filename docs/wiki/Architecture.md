@@ -1,5 +1,11 @@
 # Architecture
 
+> **Status.** The diagram and the component table describe the target design. Components marked
+> ⏳ do not exist yet: `tempera-cost` and `tempera-serve` are empty crates, artifacts are stored on
+> the local file system only (no S3), live events use Server-Sent Events/WebSocket per job, and
+> the SLM advisor calls an external OpenAI-compatible endpoint (Ollama, llama.cpp; ADR 0008), not
+> an embedded mistral.rs. Security controls and their status: [Security](Security.md).
+
 ## Overview
 
 ```mermaid
@@ -52,14 +58,14 @@ flowchart TB
 | `tempera-core` | Rust | Domain types (`Dataset`, `Task`, `JobSpec`, `Run`, `Machine`), errors, IDs |
 | `tempera-data` | Rust | Ingestion, conversion to Parquet, profiling, type inference, splits, content hashing |
 | `tempera-audit` | Rust (+ optional Python) | Statistical checks; calls Cleanlab/Fairlearn via the worker when needed |
-| SLM advisor | Rust (mistral.rs) | Semantic column analysis, explanations, suggestions as structured JSON |
-| `tempera-cost` | Rust | Memory/FLOPs/ETA estimation, price catalog, machine recommendation |
+| SLM advisor | Rust client → local OpenAI-compatible endpoint (ADR 0008) | Semantic column analysis, explanations, suggestions as structured JSON |
+| `tempera-cost` | Rust | ⏳ empty crate. Today estimation and the price catalog live in `tempera-cloud` (`estimate.rs`, `catalog.rs`) |
 | `tempera-exec` | Rust | `Executor` trait with Local, SSH, and per-cloud-provider implementations |
 | `tempera-agent` | Rust | Runs on the worker: prepares the environment, runs the backend, streams metrics, checkpoints, and heartbeats |
 | `tempera-native` | Rust | Native algorithms (linfa, Burn) for jobs that don't need Python |
 | `tempera_worker` | Python | Adapters for sklearn, LightGBM, XGBoost, PyTorch, HF Transformers, PEFT/Unsloth, Cleanlab, Fairlearn |
 | `tempera-track` | Rust | Persistence of runs, metrics (time series), artifacts, lineage |
-| `tempera-serve` | Rust | Inference from ONNX (ort) or safetensors (Candle) |
+| `tempera-serve` | Rust | ⏳ empty crate (#59): inference from ONNX or safetensors |
 | `tempera-server` | Rust | Axum API, WebSocket, embedded UI (rust-embed), CLI (clap) |
 | `ui/` | TypeScript | SvelteKit compiled as static output and embedded in the binary |
 
