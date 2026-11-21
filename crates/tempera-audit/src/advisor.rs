@@ -55,21 +55,34 @@ pub enum AdvisorResult {
     Skipped(String),
 }
 
-fn is_local(url: &str) -> bool {
-    let rest = url.split("://").nth(1).unwrap_or(url);
-    let host = rest.split(['/', ':']).next().unwrap_or("");
-    let host = if rest.starts_with('[') {
-        rest.split(']').next().unwrap_or("").trim_start_matches('[')
-    } else {
-        host
+/// Whether `raw` points at this machine. Parsed as a URL (WHATWG rules, the same an HTTP
+/// client applies), so `http://localhost:80@remote.example/` is the remote host, not
+/// localhost (#74). Userinfo is refused outright; only loopback addresses and the name
+/// `localhost` count as local.
+fn is_local(raw: &str) -> bool {
+    let Ok(u) = url::Url::parse(raw) else {
+        return false;
     };
-    matches!(host, "127.0.0.1" | "localhost" | "::1")
+    if !matches!(u.scheme(), "http" | "https") || !u.username().is_empty() || u.password().is_some() {
+        return false;
+    }
+    match u.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
 }
 
 fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(timeout))
+            // A local endpoint must not be able to bounce the request (and the column
+            // samples) to another host.
+            .max_redirects(0)
             .build(),
     )
 }
@@ -131,7 +144,12 @@ fn prompt(profile: &Profile, target: Option<&str>) -> String {
             .top_values
             .iter()
             .take(4)
-            .map(|v| format!("{:?}", truncate(&v.value, 40)))
+            .map(|v| match crate::privacy::classify(&v.value) {
+                // The model only needs to know the kind to answer `personal_data`;
+                // the value itself never leaves the audit, even to a local endpoint.
+                Some(kind) => format!("<{}>", kind.label()),
+                None => format!("{:?}", truncate(&v.value, 40)),
+            })
             .collect();
         let range = c
             .numeric
@@ -303,6 +321,7 @@ pub fn findings(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     #[test]
@@ -311,6 +330,23 @@ mod tests {
         assert!(is_local("http://localhost:8080"));
         assert!(is_local("http://[::1]:11434/v1"));
         assert!(!is_local("https://api.example.com/v1"));
+        assert!(is_local("http://127.1.2.3:11434/v1"), "all of 127/8 is loopback");
+        assert!(is_local("http://LOCALHOST:11434"));
+        // #74: these all reach a remote host.
+        for remote in [
+            "http://localhost:80@collector.example.com/v1",
+            "http://localhost@collector.example.com/v1",
+            "http://user:pw@127.0.0.1:11434/v1",
+            "http://localhost.collector.example.com/v1",
+            "http://127.0.0.1.collector.example.com/v1",
+            "http://[::ffff:10.0.0.1]/v1",
+            "ftp://127.0.0.1/v1",
+            "localhost:11434",
+            "not a url",
+        ] {
+            assert!(!is_local(remote), "{remote} must not count as local");
+        }
+        assert!(is_local("http://[::ffff:127.0.0.1]:11434/v1"));
         let spec = AdvisorSpec {
             enabled: true,
             model: "x".into(),
@@ -328,6 +364,32 @@ mod tests {
             advise_at("https://api.example.com/v1", &spec, &p, None),
             AdvisorResult::Skipped(s) if s.contains("not local")
         ));
+    }
+
+    /// The prompt says which kind of personal data a column holds, never the values.
+    #[test]
+    fn prompt_never_contains_personal_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut csv = String::from("email,plan,y\n");
+        for i in 0..40 {
+            csv += &format!(
+                "person{}@example.com,{},{}\n",
+                i % 3,
+                ["basic", "pro"][i % 2],
+                i % 2
+            );
+        }
+        let src = tmp.path().join("d.csv");
+        std::fs::write(&src, csv).unwrap();
+        let ds = tempera_data::ingest(&src, tmp.path()).unwrap();
+        let profile = tempera_data::profile_dataset(&ds).unwrap();
+        let text = prompt(&profile, Some("y"));
+        assert!(!text.contains('@'), "{text}");
+        assert!(text.contains("<e-mail addresses>"), "{text}");
+        assert!(
+            text.contains("\"basic\""),
+            "ordinary values are still shown: {text}"
+        );
     }
 
     #[test]
