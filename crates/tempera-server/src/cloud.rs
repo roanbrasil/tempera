@@ -239,14 +239,16 @@ impl CloudInstance {
             .ok_or_else(|| anyhow!("no cloud offer was chosen"))?;
         let key_dir = home.join("cloud").join("keys").join(job_id);
         let (key, public) = throwaway_key(&key_dir)?;
-        let boot = BootSpec::for_job(job_id, public);
-        let leases = Leases::new(home);
+        let (leases, owner) = ledger()?;
+        let boot = BootSpec::for_job(&owner, job_id, public);
         let provider_name = plan.provider.name().to_owned();
 
         // Clean up after earlier crashes before renting more.
         {
-            let (p, l) = (plan.provider.clone(), leases.clone());
-            match blocking(move || tempera_cloud::guard::reap(p.as_ref(), &l, now_s(), LEASE_TTL_S)).await? {
+            let (p, l, o) = (plan.provider.clone(), leases.clone(), owner.clone());
+            match blocking(move || tempera_cloud::guard::reap(p.as_ref(), &l, &o, now_s(), LEASE_TTL_S))
+                .await?
+            {
                 Ok(r) if !r.terminated.is_empty() => {
                     ui::detail(&format!(
                         "reaped {} orphan instance(s) from earlier runs",
@@ -271,7 +273,36 @@ impl CloudInstance {
         let id = match blocking(move || p.launch(&o, &b)).await? {
             Ok(id) => id,
             Err(e) => {
-                let _ = leases.close(&provider_name, &boot.name);
+                // A create call that failed (a timeout, a dropped connection) may still have
+                // created the instance. Look it up by name and stop it; if that is not
+                // possible, keep the lease so the reaper owns the cleanup.
+                let (p, n) = (plan.provider.clone(), boot.name.clone());
+                let cleaned = blocking(move || -> tempera_cloud::Result<usize> {
+                    let mut n_terminated = 0;
+                    for i in p
+                        .instances()?
+                        .into_iter()
+                        .filter(|i| i.name == n && i.state != InstanceState::Gone)
+                    {
+                        p.terminate(&i.id)?;
+                        n_terminated += 1;
+                    }
+                    Ok(n_terminated)
+                })
+                .await?;
+                match cleaned {
+                    Ok(n) => {
+                        if n > 0 {
+                            ui::detail(&format!(
+                                "launch failed but an instance was created; terminated {n}"
+                            ));
+                        }
+                        let _ = leases.close(&provider_name, &boot.name);
+                    }
+                    Err(c) => ui::detail(&format!(
+                        "launch failed and the provider could not be checked ({c}); the reaper will clean up"
+                    )),
+                }
                 return Err(e.into());
             }
         };
@@ -335,6 +366,8 @@ impl CloudInstance {
             "ConnectTimeout=10".into(),
         ];
         loop {
+            // sshd can take minutes after the endpoint appears: keep the lease alive.
+            let _ = inst.leases.heartbeat(inst.provider.name(), &inst.name, now_s());
             match ssh.exec("true").await {
                 Ok(_) => break,
                 Err(e) if Instant::now() > deadline || events::is_cancelled(job_id) => {
@@ -498,21 +531,29 @@ impl Drop for CloudInstance {
     }
 }
 
+/// The per-user rental ledger and this installation's owner id (#87).
+pub fn ledger() -> anyhow::Result<(Leases, String)> {
+    let dir = tempera_cloud::state_dir();
+    let owner = tempera_cloud::owner_id(&dir)?;
+    Ok((Leases::new(&dir), owner))
+}
+
 /// Background reaper for `tempera up`: every few minutes, for every provider
 /// whose API key is configured.
-pub fn spawn_reaper(home: PathBuf) {
+pub fn spawn_reaper(_home: PathBuf) {
     tokio::spawn(async move {
         loop {
             for name in configured_providers() {
-                let home = home.clone();
                 let _ = tokio::task::spawn_blocking(move || {
+                    let (leases, owner) = match ledger() {
+                        Ok(x) => x,
+                        Err(e) => {
+                            tracing::warn!("reaper: {e}");
+                            return;
+                        }
+                    };
                     if let Ok(p) = tempera_cloud::provider(name) {
-                        match tempera_cloud::guard::reap(
-                            p.as_ref(),
-                            &Leases::new(&home),
-                            now_s(),
-                            LEASE_TTL_S,
-                        ) {
+                        match tempera_cloud::guard::reap(p.as_ref(), &leases, &owner, now_s(), LEASE_TTL_S) {
                             Ok(r) if !r.terminated.is_empty() => {
                                 tracing::warn!(
                                     provider = name,

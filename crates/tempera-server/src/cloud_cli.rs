@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use clap::Subcommand;
 use tempera_cloud::estimate::{fmt_duration, fmt_usd};
-use tempera_cloud::guard::{LEASE_TTL_S, Leases};
+use tempera_cloud::guard::LEASE_TTL_S;
 use tempera_cloud::{ResourceRequest, catalog, now_s};
 
 use crate::candidates::candidates;
@@ -251,7 +251,8 @@ pub async fn run(home: &Path, cmd: CloudCmd) -> anyhow::Result<i32> {
                 Ok(tempera_cloud::provider(&provider)?.instances()?)
             })
             .await??;
-            let leases = Leases::new(home).load();
+            let (ledger, owner) = crate::cloud::ledger()?;
+            let leases = ledger.load()?;
             for i in &list {
                 let leased = leases
                     .iter()
@@ -266,9 +267,10 @@ pub async fn run(home: &Path, cmd: CloudCmd) -> anyhow::Result<i32> {
                         (Some(h), Some(p)) => format!("ssh {h}:{p}"),
                         _ => String::new(),
                     },
-                    match (i.is_tempera(), leased) {
-                        (true, true) => "  [tempera, leased]",
-                        (true, false) => "  [tempera, ORPHAN]",
+                    match (i.is_owned_by(&owner), i.is_tempera(), leased) {
+                        (true, _, true) => "  [tempera, leased]",
+                        (true, _, false) => "  [tempera, ORPHAN]",
+                        (false, true, _) => "  [tempera, another owner: not touched]",
                         _ => "",
                     }
                 );
@@ -278,13 +280,14 @@ pub async fn run(home: &Path, cmd: CloudCmd) -> anyhow::Result<i32> {
         CloudCmd::Reap { providers, ttl_min } => {
             let mut code = 0;
             for name in or_configured(providers)? {
-                let h = home.to_path_buf();
                 let n = name.clone();
                 let r = blocking(move || -> anyhow::Result<_> {
                     let p = tempera_cloud::provider(&n)?;
+                    let (leases, owner) = crate::cloud::ledger()?;
                     Ok(tempera_cloud::guard::reap(
                         p.as_ref(),
-                        &Leases::new(&h),
+                        &leases,
+                        &owner,
                         now_s(),
                         ttl_min * 60,
                     )?)

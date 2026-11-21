@@ -156,10 +156,80 @@ pub struct BootSpec {
     pub bid_usd_per_hour: Option<f64>,
 }
 
+/// Per-user state that must not depend on the project directory (the rental ledger,
+/// the owner id): `$TEMPERA_STATE_DIR`, else `$XDG_STATE_HOME/tempera`, else
+/// `~/.local/state/tempera` (`%LOCALAPPDATA%\tempera` on Windows).
+pub fn state_dir() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    if let Some(d) = std::env::var_os("TEMPERA_STATE_DIR") {
+        return PathBuf::from(d);
+    }
+    if let Some(d) = std::env::var_os("XDG_STATE_HOME").filter(|d| !d.is_empty()) {
+        return PathBuf::from(d).join("tempera");
+    }
+    if cfg!(windows)
+        && let Some(d) = std::env::var_os("LOCALAPPDATA")
+    {
+        return PathBuf::from(d).join("tempera");
+    }
+    std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".local").join("state").join("tempera"))
+        .unwrap_or_else(|| PathBuf::from(".tempera-state"))
+}
+
+/// This installation's owner id: 8 hex characters, created once in `dir/owner`.
+/// It is part of every instance name, so the reaper only ever touches instances this
+/// user created, never those of another machine or teammate sharing the account (#87).
+pub fn owner_id(dir: &std::path::Path) -> Result<String> {
+    use std::hash::{BuildHasher, Hasher};
+    use std::io::Write;
+    let path = dir.join("owner");
+    let valid = |s: &str| s.len() == 8 && s.bytes().all(|b| b.is_ascii_hexdigit());
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        let s = s.trim().to_owned();
+        if valid(&s) {
+            return Ok(s);
+        }
+        return Err(CloudError::Refused(format!(
+            "{} is corrupt; fix or delete it (instances named with the old id will no longer be reaped)",
+            path.display()
+        )));
+    }
+    std::fs::create_dir_all(dir)?;
+    // RandomState is seeded from the OS random source; two of them give 64 random bits.
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    h.write_u32(std::process::id());
+    let id = format!("{:08x}", h.finish() as u32);
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            f.write_all(id.as_bytes())?;
+            Ok(id)
+        }
+        // Another process created it first: use theirs.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => owner_id(dir),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Name prefix of every instance this owner creates.
+pub fn owned_prefix(owner: &str) -> String {
+    format!("{TAG}-{owner}-")
+}
+
 impl BootSpec {
-    pub fn for_job(job_id: &str, ssh_public_key: impl Into<String>) -> Self {
+    pub fn for_job(owner: &str, job_id: &str, ssh_public_key: impl Into<String>) -> Self {
         Self {
-            name: format!("{TAG}-{job_id}"),
+            name: format!("{}{job_id}", owned_prefix(owner)),
             image: std::env::var("TEMPERA_CLOUD_IMAGE").unwrap_or_else(|_| DEFAULT_IMAGE.to_owned()),
             ssh_public_key: ssh_public_key.into(),
             disk_gb: 30,
@@ -201,8 +271,14 @@ pub struct Instance {
 }
 
 impl Instance {
+    /// Named like a Têmpera instance (of any owner).
     pub fn is_tempera(&self) -> bool {
-        self.name.starts_with(TAG)
+        self.name.starts_with(&format!("{TAG}-"))
+    }
+
+    /// Created by this owner (see [`owner_id`]).
+    pub fn is_owned_by(&self, owner: &str) -> bool {
+        self.name.starts_with(&owned_prefix(owner))
     }
 
     pub fn ssh_ready(&self) -> bool {

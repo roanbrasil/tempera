@@ -273,8 +273,8 @@ mod tests {
     fn pod_request_has_ssh_and_tag() {
         let offers = parse_gpu_types(&fixture("runpod_gpu_types.json"), 0).unwrap();
         let o = offers.iter().find(|o| o.spot).unwrap();
-        let body = pod_request(o, &BootSpec::for_job("job-1", "ssh-ed25519 AAA test")).unwrap();
-        assert_eq!(body["name"], "tempera-job-1");
+        let body = pod_request(o, &BootSpec::for_job("0000beef", "job-1", "ssh-ed25519 AAA test")).unwrap();
+        assert_eq!(body["name"], "tempera-0000beef-job-1");
         assert_eq!(body["ports"][0], "22/tcp");
         assert_eq!(body["env"]["PUBLIC_KEY"], "ssh-ed25519 AAA test");
         assert_eq!(body["interruptible"], true);
