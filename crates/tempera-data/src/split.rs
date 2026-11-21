@@ -1,7 +1,8 @@
 //! Model-ready data and train/valid/test splits.
 //!
 //! Order of operations (docs/wiki/Data-Audit.md):
-//! 1. drop rows without a target, 2. deduplicate exact duplicates,
+//! 1. deduplicate exact duplicates of *source* rows (all columns, ids included),
+//! 2. drop rows without a target,
 //! 3. pick the split strategy (temporal > group > stratified > random),
 //! 4. hold out the **test** set first, then carve validation from the rest,
 //! 5. write `train/valid/test.parquet` + `split.json`, addressed by a hash of
@@ -26,7 +27,7 @@ pub const TIME: &str = "__time__";
 /// Prefix of sensitive-attribute columns in the model-ready layout.
 pub const SENSITIVE_PREFIX: &str = "__sens__";
 /// Bump when the split layout or algorithm changes.
-pub const SPLIT_VERSION: u32 = 2;
+pub const SPLIT_VERSION: u32 = 3;
 
 /// The three feature kinds backends understand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -138,26 +139,25 @@ pub fn make_split(ds: &Dataset, spec: &JobSpec, task: TaskType, plan: &FeaturePl
     }
 
     let classification = labeled(spec, task);
-    let mut df = model_ready(
-        scan_parquet(&ds.data_path())?,
-        spec,
-        target.as_deref(),
-        plan,
-        classification,
-    )?
-    .collect()?;
+    // A duplicate is an identical *source* row (every column, ids included), the same
+    // definition audit check A2 counts. Deduplicating after the projection to features
+    // would also delete distinct rows that merely share feature values, which destroys
+    // P(y|x) and the class prior once an id column is dropped (#85).
+    let raw = scan_parquet(&ds.data_path())?;
+    let total = row_count(raw.clone())?;
+    let raw = if plan.dedupe {
+        raw.unique_stable(None, UniqueKeepStrategy::First)
+    } else {
+        raw
+    };
+    let mut df = model_ready(raw, spec, target.as_deref(), plan, classification)?.collect()?;
+    let dropped_duplicates = (total - df.height()) as u64;
 
     let before = df.height();
     if target.is_some() {
         df = df.filter(&df.column(TARGET)?.is_not_null())?;
     }
     let dropped_null_target = (before - df.height()) as u64;
-
-    let before = df.height();
-    if plan.dedupe {
-        df = df.unique_stable(None, UniqueKeepStrategy::First, None)?;
-    }
-    let dropped_duplicates = (before - df.height()) as u64;
     if df.height() < 10 {
         return Err(DataError::Invalid(format!(
             "only {} usable rows; need at least 10",
@@ -349,6 +349,11 @@ fn model_ready(
         exprs.push(col(tc.as_str()).alias(TIME));
     }
     Ok(lf.select(exprs))
+}
+
+fn row_count(lf: LazyFrame) -> Result<usize> {
+    let df = lf.select([len().alias("n")]).collect()?;
+    Ok(df.column("n")?.u32()?.get(0).unwrap_or(0) as usize)
 }
 
 /// Labels as strings; floats that are whole numbers lose the `.0`.
@@ -627,6 +632,42 @@ mod tests {
         );
         let train = read(&s.path(Partition::Train));
         assert!(train.column(TARGET).unwrap().dtype().is_string());
+    }
+
+    /// #85: rows that share feature values but not identity are data, not duplicates.
+    #[test]
+    fn dedupe_keeps_distinct_rows_with_equal_features() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut csv = String::from("id,plan,region,label\n");
+        for i in 0..2000 {
+            let label = if i % 3 == 0 { "yes" } else { "no" };
+            csv += &format!("u{i},{},{},{label}\n", ["a", "b"][i % 2], ["x", "y", "z"][i % 3]);
+        }
+        csv += "u0,a,x,yes\n"; // one exact copy of a source row
+        let p = tmp.path().join("d.csv");
+        std::fs::write(&p, csv).unwrap();
+        let ds = ingest(&p, tmp.path()).unwrap();
+        // `id` is not a feature (A10 drops identifiers), so only 6 feature combinations exist.
+        let plan = FeaturePlan {
+            features: ["plan", "region"]
+                .iter()
+                .map(|n| Feature {
+                    name: (*n).into(),
+                    kind: FeatureKind::Categorical,
+                })
+                .collect(),
+            datetime: vec![],
+            dropped: BTreeMap::new(),
+            dedupe: true,
+        };
+        let s = make_split(&ds, &spec(""), TaskType::BinaryClassification, &plan).unwrap();
+        assert_eq!(
+            s.dropped_duplicates, 1,
+            "only the exact source copy is a duplicate"
+        );
+        assert_eq!(s.rows.values().sum::<u64>(), 2000);
+        let yes: u64 = s.class_counts.values().map(|c| c["yes"]).sum();
+        assert_eq!(yes, 667, "the class prior is preserved");
     }
 
     #[test]
