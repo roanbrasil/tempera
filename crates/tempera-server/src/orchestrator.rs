@@ -443,6 +443,14 @@ async fn train_and_report(
             .collect();
         done.sort_by(f64::total_cmp);
         let rest_s = done.get(done.len() / 2).map(|m| m * (cands.len() - i - 1) as f64);
+        // Test hook: cancel deterministically once `n` candidates have run.
+        if std::env::var("TEMPERA_TEST_CANCEL_AFTER_RUNS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            == Some(i)
+        {
+            events::request_cancel(job_id);
+        }
         let over_budget = budget_left(spec, started).is_some_and(|left| left <= 0.0);
         let opts = RunOpts {
             rest_s,
@@ -514,9 +522,15 @@ async fn train_and_report(
     });
 
     let unranked = task == TaskType::AnomalyDetection && split.classes.is_empty();
+    // A cancelled job (user, budget, preemption) stops before the test set: evaluating it
+    // would spend the one look at the test data on a selection that never finished (#89).
+    let cancelled = events::is_cancelled(job_id);
+    if cancelled {
+        ui::detail("cancelled: the test set was not evaluated and remains unused");
+    }
     let winner = match summaries
         .iter()
-        .find(|s| s.status == "succeeded" && (s.valid_score.is_some() || unranked))
+        .find(|s| !cancelled && s.status == "succeeded" && (s.valid_score.is_some() || unranked))
     {
         None => None,
         Some(best) => {
@@ -976,6 +990,9 @@ async fn run_candidate(
     }
 }
 
+/// Run-id suffix of the winner's test prediction.
+const TEST_RUN_SUFFIX: &str = "-test";
+
 /// Sends one job to the local agent and drains its messages into the tracker.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch(
@@ -1013,6 +1030,9 @@ pub(crate) async fn dispatch(
         plan = Some(r.rewrite(&mut v).await?);
         start.manifest_json = v.to_string();
     }
+    // The test prediction runs to completion once started: the test set is already claimed,
+    // so interrupting it would burn the one evaluation and still fail the job (#89).
+    let cancellable = !run_id.ends_with(TEST_RUN_SUFFIX);
     let mut rx = hub.start(&machine, start).await?;
     let mut points = Vec::new();
     // Backend-computed evaluation metrics (clustering quality, §8), last value wins.
@@ -1025,7 +1045,7 @@ pub(crate) async fn dispatch(
     loop {
         let m = tokio::select! {
             m = rx.recv() => m,
-            () = events::cancelled(job_id), if !cancel_sent => {
+            () = events::cancelled(job_id), if cancellable && !cancel_sent => {
                 cancel_sent = true;
                 let _ = hub.cancel(&machine, job_id, true).await;
                 continue;
@@ -1258,7 +1278,7 @@ async fn evaluate_winner(
                 tracker,
                 hub,
                 job_id,
-                &format!("{}-test", best.run_id),
+                &format!("{}{TEST_RUN_SUFFIX}", best.run_id),
                 cand.backend,
                 JobCommand::Predict,
                 serde_json::to_string(&pm)?,

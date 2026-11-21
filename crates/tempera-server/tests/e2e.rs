@@ -103,6 +103,40 @@ fn leak_blocks_then_drop_trains_and_reports() {
     );
 }
 
+/// #89: a job cancelled after some candidates finished ends as `cancelled`, with a report,
+/// and the test set is never evaluated (no winner, no test claim).
+#[test]
+fn cancelled_job_keeps_the_test_set_unused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = houses_on(tmp.path(), "");
+    // Candidate 0 is the baseline, 1 is linear_regression; cancel before 2 (ridge).
+    let out = tempera_env(
+        tmp.path(),
+        &["run", spec.to_str().unwrap()],
+        &[("TEMPERA_TEST_CANCEL_AFTER_RUNS", "2")],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("linear_regression"), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("test set was not evaluated"),
+        "{stdout}\n{stderr}"
+    );
+    assert!(!stdout.contains("evaluated once"), "{stdout}");
+    assert!(!stdout.contains("Winner"), "{stdout}");
+
+    let runs = String::from_utf8_lossy(&tempera(tmp.path(), &["runs"]).stdout).into_owned();
+    assert!(runs.contains("cancelled"), "{runs}");
+    let report = std::fs::read_dir(tmp.path().join("jobs"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path().join("report.json"))
+        .find(|p| p.is_file())
+        .expect("a cancelled job still gets a report");
+    let r: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(report).unwrap()).unwrap();
+    assert!(r["winner"].is_null(), "{}", r["winner"]);
+}
+
 #[test]
 fn regression_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
