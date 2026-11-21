@@ -347,8 +347,16 @@ fn backend_command(
             if matches!(action, "quality" | "fairness") {
                 c.args(["--extra", "quality"]);
             }
-            c.args(["--quiet", "python", "-m", "tempera_worker", action, "--manifest"])
-                .arg(manifest);
+            c.args([
+                "--frozen",
+                "--quiet",
+                "python",
+                "-m",
+                "tempera_worker",
+                action,
+                "--manifest",
+            ])
+            .arg(manifest);
             Ok(c)
         }
         _ => Err("StartJob.backend must be NATIVE or PYTHON".into()),
