@@ -243,7 +243,14 @@
           ]
         },
         "sensitive": {
-          "description": "Sensitive attributes used for the fairness report.",
+          "description": "Sensitive attributes used for the fairness report. They are **not** model\nfeatures unless also listed in `sensitive_as_feature`.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sensitive_as_feature": {
+          "description": "Sensitive attributes the model may use as features (an explicit, recorded decision).",
           "type": "array",
           "items": {
             "type": "string"

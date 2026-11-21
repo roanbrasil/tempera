@@ -58,9 +58,13 @@ pub struct DataSpec {
     /// Entity column (e.g. `customer_id`); enables group splits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_column: Option<String>,
-    /// Sensitive attributes used for the fairness report.
+    /// Sensitive attributes used for the fairness report. They are **not** model
+    /// features unless also listed in `sensitive_as_feature`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sensitive: Vec<String>,
+    /// Sensitive attributes the model may use as features (an explicit, recorded decision).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensitive_as_feature: Vec<String>,
     /// Columns to drop (usually decisions taken during the audit).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drop: Vec<String>,
@@ -581,6 +585,14 @@ impl JobSpec {
         }
         if self.data.source.trim().is_empty() {
             push("data.source", "must not be empty".to_owned());
+        }
+        for c in &self.data.sensitive_as_feature {
+            if !self.data.sensitive.contains(c) {
+                push(
+                    "data.sensitive_as_feature",
+                    format!("`{c}` is not listed in `data.sensitive`"),
+                );
+            }
         }
         if let Some(kind) = self.task.kind {
             if kind.is_supervised() && self.data.target.is_none() {

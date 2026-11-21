@@ -127,6 +127,34 @@ pub fn audit(
                 .insert(c.name.clone(), "dropped in the spec (`data.drop`)".into());
             continue;
         }
+        // Sensitive attributes are evaluated (fairness report), not learned from, unless the
+        // user opted in; the opt-in is recorded as a finding (#91).
+        if spec.data.sensitive.contains(&c.name) {
+            if !spec.data.sensitive_as_feature.contains(&c.name) {
+                plan.dropped.insert(
+                    c.name.clone(),
+                    "sensitive attribute: used for the fairness report, not as a feature".into(),
+                );
+                continue;
+            }
+            findings.push(Finding {
+                id: format!("A9:as_feature:{}", c.name),
+                check: "A9".into(),
+                severity: Severity::Yellow,
+                column: Some(c.name.clone()),
+                title: "Sensitive attribute used as a feature".into(),
+                evidence: format!(
+                    "`{}` is listed in `data.sensitive_as_feature`, so the model sees it directly.",
+                    c.name
+                ),
+                suggestion: "Make sure using this attribute is intended and lawful for this model, and \
+                             check the fairness report."
+                    .into(),
+                resolution: Resolution::Auto {
+                    action: "kept as a feature (data.sensitive_as_feature)".into(),
+                },
+            });
+        }
         if let Some((sev, title, why)) = unusable(c) {
             plan.dropped.insert(c.name.clone(), why.clone());
             findings.push(Finding {
@@ -637,6 +665,38 @@ mod tests {
 
     fn ids(r: &AuditReport) -> Vec<&str> {
         r.findings.iter().map(|f| f.id.as_str()).collect()
+    }
+
+    /// #91: a sensitive attribute is not a feature unless the user opts in, and the opt-in shows.
+    #[test]
+    fn sensitive_attributes_are_not_features_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = fixture(tmp.path());
+        let ds = ingest(&src, tmp.path()).unwrap();
+        let profile = profile_dataset(&ds).unwrap();
+        let audit_with = |data_extra: &str| {
+            let spec = JobSpec::from_yaml(&format!(
+                "version: 1\nname: t\ndata: {{ source: churn.csv, target: churned, sensitive: [plan]{data_extra} }}\n"
+            ))
+            .unwrap();
+            let inf = infer_task(&spec, &profile).unwrap();
+            audit(&ds, &spec, &profile, &inf).unwrap()
+        };
+        let feats = |r: &AuditReport| r.plan.features.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+
+        let r = audit_with("");
+        assert!(!feats(&r).contains(&"plan".to_owned()), "{:?}", feats(&r));
+        assert!(r.plan.dropped["plan"].contains("fairness report"));
+        assert!(!ids(&r).contains(&"A9:as_feature:plan"));
+
+        let r = audit_with(", sensitive_as_feature: [plan]");
+        assert!(feats(&r).contains(&"plan".to_owned()));
+        assert!(ids(&r).contains(&"A9:as_feature:plan"), "{:?}", ids(&r));
+
+        let bad = JobSpec::from_yaml(
+            "version: 1\nname: t\ndata: { source: churn.csv, target: churned, sensitive_as_feature: [plan] }\n",
+        );
+        assert!(bad.is_err(), "opt-in must name a declared sensitive attribute");
     }
 
     /// #86: an integer 0/1 target must get class counts like a string target.

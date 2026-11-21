@@ -13,7 +13,8 @@ data:
   target: churned
   time_column: reference_date               # optional → temporal split
   group_column: customer_id                 # optional → group split
-  sensitive: [gender, age_group]            # optional → fairness report
+  sensitive: [gender, age_group]            # optional → fairness report; not model features
+  # sensitive_as_feature: [age_group]       # explicit opt-in to let the model use one (recorded as A9:as_feature)
   drop: [chargeback_amount]                 # audit decisions
 
 task:
