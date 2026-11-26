@@ -255,7 +255,7 @@ fn worker_command(manifest: &Path) -> anyhow::Result<Command> {
         c.arg("run")
             .arg("--project")
             .arg(worker.context("worker project not found")?)
-            .args(["--extra", "llm", "--quiet", "python"]);
+            .args(["--extra", "llm", "--frozen", "--quiet", "python"]);
         c
     };
     c.args(["-m", "tempera_worker", "finetune", "--manifest"])
